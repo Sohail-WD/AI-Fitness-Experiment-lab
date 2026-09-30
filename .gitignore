@@ -1,0 +1,9 @@
+node_modules/
+dist/
+public/mediapipe/
+data/
+.env
+.env.*
+!.env.example
+*.log
+.claude/.verify-stamp

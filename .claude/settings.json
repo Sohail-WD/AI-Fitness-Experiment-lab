@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/claude-hook-verify.mjs\" post-edit",
+            "timeout": 90,
+            "statusMessage": "Type-checking…"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/claude-hook-verify.mjs\" stop",
+            "timeout": 240,
+            "statusMessage": "Running tests (source changed)…"
+          }
+        ]
+      }
+    ]
+  }
+}

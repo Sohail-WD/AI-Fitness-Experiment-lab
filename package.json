@@ -1,0 +1,38 @@
+{
+  "name": "ai-fitness-experiment-lab",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "copy-wasm": "node scripts/copy-mediapipe-wasm.mjs",
+    "predev": "npm run copy-wasm",
+    "dev": "vite",
+    "dev:server": "node --watch --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.ts",
+    "dev:all": "node scripts/dev.mjs",
+    "start:server": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server/index.ts",
+    "prebuild": "npm run copy-wasm",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
+    "fastify": "^5.12.5",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  }
+}
