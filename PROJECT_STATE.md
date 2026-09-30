@@ -19,7 +19,7 @@ Persistent summary for new sessions. Details live in `spec.md` (product) and `CL
 - Frontend: React + TypeScript + Vite (`src/`)
 - Backend: Node (≥ 22.18, native TS) + Fastify + SQLite via `node:sqlite` (`server/`)
 - Shared Zod contracts, exercise library, deterministic metrics/engines (`shared/`)
-- Tests: Vitest, **301 passing** (`npm test`); `npm run typecheck`; `npm run build`
+- Tests: Vitest, **311 passing** (`npm test`); `npm run typecheck`; `npm run build`
 - Dev: `npm run dev:all` (API :3001, UI :5173)
 
 ## Invariants
@@ -38,8 +38,8 @@ Persistent summary for new sessions. Details live in `spec.md` (product) and `CL
 ## Adaptation (M9) — how it works
 - `shared/adaptation/engine.ts` (pure rules, classification, restriction guard, lifecycle), `server/services/adaptationService.ts`, `server/routes/adaptations.ts`, `src/pages/AdaptationPage.tsx`. No LLM decides anything.
 - Rules: `workout_time` experiment → preferred time (minor); `workout_duration` experiment → workout length (significant). Needs a completed experiment with sufficient data and a clear difference (≥10 points, or ≥1 rating point).
-- Lifecycle: `pending → accepted → applied`, `pending → declined`; `auto_applied` only for minor, safe (timing), REAL-data proposals. Simulated proposals always need approval and are labelled SIMULATED.
-- The profile is the workout-generation config: apply updates it (constraints untouched), then generates the next workout via the normal personalization/generator. Stale proposals (settings changed since) cannot be applied.
+- Lifecycle: `POST /:id/approve` = accept + apply in ONE atomic step (`pending → applied`); `decline` from any open state; `POST /:id/refresh` re-derives a stale proposal in place (same id, still one per experiment). `auto_applied` only for minor, safe (timing), REAL-data proposals; a failed auto-apply rolls back and stays pending. `accepted` exists only as a legacy state (still approvable/declinable). Simulated proposals always need approval and are labelled SIMULATED.
+- The profile is the workout-generation config: apply updates it (constraints untouched), then generates the next workout via the normal personalization/generator. Profile + next workout + proposal status are written in one transaction (`withTransaction`, `writeProfile`); any failure rolls back and the proposal stays open. Stale proposals (settings changed since; preferred times compared as sets) cannot be applied until refreshed.
 - DB migration 3 rebuilt `adaptation_proposals` (new statuses + provenance columns, one proposal per experiment).
 
 ## Known limitations (documented in milestone reports)
@@ -47,4 +47,4 @@ Persistent summary for new sessions. Details live in `spec.md` (product) and `CL
 - Single user, no auth; no per-day scheduling (planned workouts derive from weekly frequency).
 - Simulated history reuses the latest real workout plan; experiment windows are day/UTC-week based.
 - AI analysis: only digits are number-checked (number words are not); default Groq model `llama-3.3-70b-versatile` unverified against the live API (set `GROQ_MODEL`); the `analysis_reports` table exists but reports are not persisted.
-- Adaptation: only workout time and duration have rules (no frequency/exercise/structure experiments exist yet); apply is not one atomic transaction (a retry is safe); no undo button (change settings on the Profile page).
+- Adaptation: only workout time and duration have rules (no frequency/exercise/structure experiments exist yet); no undo button (change settings on the Profile page).

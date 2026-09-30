@@ -78,6 +78,31 @@ export function saveTransition(db: Database, p: AdaptationProposal): void {
   );
 }
 
+/**
+ * Replace an open proposal's content in place (same id and experiment), used
+ * when a stale proposal is refreshed against the current settings. Keeps the
+ * one-proposal-per-experiment rule.
+ */
+export function replaceProposalContent(db: Database, p: AdaptationProposal): void {
+  db.prepare(
+    `UPDATE adaptation_proposals SET title = ?, significance = ?, status = ?, changes = ?, rationale = ?, is_simulated = ?,
+       result_computed_at = ?, created_at = ?, decided_at = ?, applied_at = ?, applied_workout_id = ? WHERE id = ?`,
+  ).run(
+    p.title,
+    p.significance,
+    p.status,
+    JSON.stringify(p.changes),
+    p.rationale,
+    p.isSimulated ? 1 : 0,
+    p.resultComputedAt,
+    p.createdAt,
+    p.decidedAt,
+    p.appliedAt,
+    p.appliedWorkoutId,
+    p.id,
+  );
+}
+
 export function getProposal(db: Database, id: string): AdaptationProposal | null {
   const row = db.prepare('SELECT * FROM adaptation_proposals WHERE id = ?').get(id) as unknown as Row | undefined;
   return row ? toProposal(row) : null;

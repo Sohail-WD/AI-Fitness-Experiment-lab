@@ -91,11 +91,23 @@ export function currentValue(profile: Pick<UserProfile, 'availableMinutes' | 'sc
   }
 }
 
-const sameValue = (a: ChangeValue | undefined, b: ChangeValue | undefined) => JSON.stringify(a) === JSON.stringify(b);
+/**
+ * Equality for configuration values. Lists (e.g. preferred workout times) are
+ * compared as SETS: ["morning","evening"] equals ["evening","morning"]. Only
+ * the comparison is normalized; stored values keep the user's order.
+ */
+export function sameConfigValue(a: ChangeValue | undefined, b: ChangeValue | undefined): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    const setA = new Set(a);
+    const setB = new Set(b);
+    return setA.size === setB.size && [...setA].every((v) => setB.has(v));
+  }
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 /** True when the configuration no longer matches the values a proposal was based on. */
 export function isStale(profile: Pick<UserProfile, 'availableMinutes' | 'schedule'>, changes: AdaptationChange[]): boolean {
-  return changes.some((c) => !sameValue(currentValue(profile, c.parameter), c.from));
+  return changes.some((c) => !sameConfigValue(currentValue(profile, c.parameter), c.from));
 }
 
 export class AdaptationApplyError extends Error {
@@ -203,7 +215,7 @@ export function proposeFromExperiment(experiment: Experiment, result: Experiment
     return skip('no_rule');
   }
 
-  if (changes.every((c) => JSON.stringify(c.from) === JSON.stringify(c.to))) return skip('already_configured');
+  if (changes.every((c) => sameConfigValue(c.from, c.to))) return skip('already_configured');
   if (violatesRestrictions(changes, ctx.constraints, ctx.library).length > 0) return skip('violates_constraints');
 
   return {
@@ -222,19 +234,27 @@ export function proposeFromExperiment(experiment: Experiment, result: Experiment
 
 /* ---------- lifecycle ---------- */
 
-export type AdaptationAction = 'accept' | 'decline' | 'apply' | 'auto_apply';
+export type AdaptationAction = 'approve' | 'accept' | 'decline' | 'apply' | 'auto_apply';
 export class AdaptationTransitionError extends Error {
   override name = 'AdaptationTransitionError';
 }
 
+/** Proposals the user can still act on (approve, decline, or update if stale). */
+export const isOpen = (p: Pick<AdaptationProposal, 'status'>) => p.status === 'pending' || p.status === 'accepted';
+
 /**
- * pending → accepted | declined | auto_applied (minor + safe + real data only);
- * accepted → applied. A significant change can therefore only be applied after the user accepted it.
+ * approve: the user's explicit "accept and apply" — pending (or a legacy
+ *   accepted) → applied in one step, so no proposal is ever left half-way.
+ * decline: any open proposal → declined.
+ * auto_apply: pending → auto_applied (minor + safe + real data only).
+ * accept / apply: the two halves of approve, kept for compatibility.
+ * A significant change can therefore only be applied through the user's approval.
  */
 export function transitionProposal(p: AdaptationProposal, action: AdaptationAction, now: Date, appliedWorkoutId: string | null = null): AdaptationProposal {
   const at = now.toISOString();
+  if (action === 'approve' && isOpen(p)) return { ...p, status: 'applied', decidedAt: p.decidedAt ?? at, appliedAt: at, appliedWorkoutId };
   if (action === 'accept' && p.status === 'pending') return { ...p, status: 'accepted', decidedAt: at };
-  if (action === 'decline' && p.status === 'pending') return { ...p, status: 'declined', decidedAt: at };
+  if (action === 'decline' && isOpen(p)) return { ...p, status: 'declined', decidedAt: at };
   if (action === 'apply' && p.status === 'accepted') return { ...p, status: 'applied', appliedAt: at, appliedWorkoutId };
   if (action === 'auto_apply' && p.status === 'pending') {
     if (!canAutoApply(p)) throw new AdaptationTransitionError('This change needs your approval and cannot be applied automatically');

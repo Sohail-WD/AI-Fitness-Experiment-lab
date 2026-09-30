@@ -10,14 +10,14 @@ import { findExercise } from '../../shared/exercises/library';
 import { adaptationListSchema, applyResponseSchema, generateAdaptationsResponseSchema, proposalResponseSchema } from '../../shared/schemas/adaptation';
 import type { Experiment } from '../../shared/schemas/experiment';
 import { experimentWithResultSchema } from '../../shared/schemas/experiment';
-import { profileResponseSchema } from '../../shared/schemas/profile';
+import { type ProfileInput, profileResponseSchema } from '../../shared/schemas/profile';
 import { workoutSchema } from '../../shared/schemas/workout';
 import { testConfig } from './helpers';
 
 let db: Database;
 let app: FastifyInstance;
 
-const baseProfile = {
+const baseProfile: ProfileInput['profile'] = {
   name: 'Asha',
   fitnessLevel: 'beginner',
   goals: ['general_fitness'],
@@ -132,7 +132,9 @@ describe('proposal generation and references', () => {
 });
 
 describe('approval and lifecycle', () => {
-  it('a significant change waits for approval, then accept → apply updates the plan and the next workout', async () => {
+  const approve = (id: string) => post(`/api/adaptations/${id}/approve`);
+
+  it('a significant change waits for approval; "accept and apply" is one step that updates the plan and the next workout', async () => {
     await setup();
     const before = await latestWorkout();
     expect(before.requirements.targetDurationMinutes).toBe(30);
@@ -142,42 +144,55 @@ describe('approval and lifecycle', () => {
     expect(p).toMatchObject({ status: 'pending', significance: 'significant', experimentId: e.id, appliedAt: null, changes: [{ parameter: 'workout_duration', from: 30, to: 15 }] });
     expect((await currentProfile()).profile.availableMinutes).toBe(30); // not applied without approval
 
-    // Cannot apply before it is accepted.
-    expect((await post(`/api/adaptations/${p.id}/apply`)).statusCode).toBe(409);
-    expect((await currentProfile()).profile.availableMinutes).toBe(30);
+    // The old two-step endpoints no longer exist, so no proposal can be left half-way ("accepted").
+    expect((await post(`/api/adaptations/${p.id}/accept`)).statusCode).toBe(404);
+    expect((await post(`/api/adaptations/${p.id}/apply`)).statusCode).toBe(404);
 
-    const accepted = proposalResponseSchema.parse((await post(`/api/adaptations/${p.id}/accept`)).json()).proposal;
-    expect(accepted).toMatchObject({ status: 'accepted', appliedAt: null });
-    expect(accepted.decidedAt).not.toBeNull();
-    expect((await currentProfile()).profile.availableMinutes).toBe(30); // accepted ≠ applied
-
-    const applied = applyResponseSchema.parse((await post(`/api/adaptations/${p.id}/apply`)).json());
+    const res = await approve(p.id);
+    expect(res.statusCode).toBe(200);
+    const applied = applyResponseSchema.parse(res.json());
     expect(applied.proposal).toMatchObject({ status: 'applied', appliedWorkoutId: applied.workout.id });
+    expect(applied.proposal.decidedAt).not.toBeNull();
     expect(applied.proposal.appliedAt).not.toBeNull();
 
     // The approved change affects the next workout.
     expect((await currentProfile()).profile.availableMinutes).toBe(15);
     const next = await latestWorkout();
     expect(next.id).toBe(applied.workout.id);
-    expect(next.id).not.toBe(before.id);
     expect(next.requirements.targetDurationMinutes).toBe(15);
     expect(next.estimatedMinutes).toBeLessThanOrEqual(15);
     expect(next.estimatedMinutes).toBeLessThan(before.estimatedMinutes);
 
-    // Lifecycle is final.
-    expect((await post(`/api/adaptations/${p.id}/apply`)).statusCode).toBe(409);
+    // Final.
+    expect((await approve(p.id)).statusCode).toBe(409);
     expect((await post(`/api/adaptations/${p.id}/decline`)).statusCode).toBe(409);
   });
 
-  it('a declined proposal changes nothing and cannot be revived', async () => {
+  it('decline works from every open state, changes nothing, and is final', async () => {
+    await setup();
+    seedExperiment('shorter_vs_longer', { metrics: [0.9, 0.55] });
+    seedExperiment('morning_vs_evening', { metrics: [0.4, 0.85], isSimulated: true });
+    const [a, b] = (await generate()).created;
+
+    const declined = proposalResponseSchema.parse((await post(`/api/adaptations/${a.id}/decline`)).json()).proposal;
+    expect(declined).toMatchObject({ status: 'declined', appliedAt: null });
+    expect(declined.decidedAt).not.toBeNull();
+
+    // A legacy "accepted" proposal (from before this fix) can still be declined: no dead end.
+    db.prepare("UPDATE adaptation_proposals SET status = 'accepted', decided_at = ? WHERE id = ?").run(new Date().toISOString(), b.id);
+    expect(proposalResponseSchema.parse((await post(`/api/adaptations/${b.id}/decline`)).json()).proposal.status).toBe('declined');
+
+    expect((await currentProfile()).profile).toMatchObject({ availableMinutes: 30, schedule: { preferredTimes: [] } });
+    expect((await approve(a.id)).statusCode).toBe(409);
+    expect((await generate()).created).toEqual([]); // not re-proposed
+  });
+
+  it('a legacy "accepted" proposal can still be approved and applied', async () => {
     await setup();
     seedExperiment('shorter_vs_longer', { metrics: [0.9, 0.55] });
     const [p] = (await generate()).created;
-    const declined = proposalResponseSchema.parse((await post(`/api/adaptations/${p.id}/decline`)).json()).proposal;
-    expect(declined).toMatchObject({ status: 'declined', appliedAt: null });
-    expect((await currentProfile()).profile.availableMinutes).toBe(30);
-    expect((await post(`/api/adaptations/${p.id}/accept`)).statusCode).toBe(409);
-    expect((await generate()).created).toEqual([]); // not re-proposed
+    db.prepare("UPDATE adaptation_proposals SET status = 'accepted', decided_at = ? WHERE id = ?").run(new Date().toISOString(), p.id);
+    expect(applyResponseSchema.parse((await approve(p.id)).json()).proposal.status).toBe('applied');
   });
 
   it('a minor, safe change from REAL data is applied automatically and reversibly (via the profile)', async () => {
@@ -188,32 +203,128 @@ describe('approval and lifecycle', () => {
     expect(p).toMatchObject({ status: 'auto_applied', significance: 'minor', isSimulated: false, experimentId: e.id });
     expect(p.appliedAt).not.toBeNull();
     expect((await currentProfile()).profile.schedule.preferredTimes).toEqual(['evening']);
-    expect((await latestWorkout()).id).not.toBe(workoutsBefore); // next workout generated from the updated config
+    expect((await latestWorkout()).id).not.toBe(workoutsBefore);
 
-    // The user can change it back like any other profile setting.
     const cur = await currentProfile();
     const { id: _i, createdAt: _c, updatedAt: _u, ...rest } = cur.profile;
     await putProfile({ ...rest, schedule: { ...rest.schedule, preferredTimes: [] } } as typeof baseProfile);
     expect((await currentProfile()).profile.schedule.preferredTimes).toEqual([]);
   });
 
-  it('refuses to apply a proposal when the settings changed since it was made', async () => {
+  it('answers 404 for unknown proposals', async () => {
+    await setup();
+    expect((await approve('00000000-0000-4000-8000-000000000000')).statusCode).toBe(404);
+  });
+});
+
+describe('atomic application', () => {
+  /** Make the next workout insert fail inside the apply transaction (a real database error). */
+  const breakWorkoutInserts = () =>
+    db.exec(`CREATE TRIGGER fail_workout_insert BEFORE INSERT ON workouts BEGIN SELECT RAISE(ABORT, 'simulated failure'); END;`);
+  const repairWorkoutInserts = () => db.exec('DROP TRIGGER fail_workout_insert');
+  const workoutCount = () => (db.prepare('SELECT COUNT(*) AS n FROM workouts').get() as { n: number }).n;
+  const profileUpdatedAt = async () => (await currentProfile()).profile.updatedAt;
+
+  it('a failure while creating the workout rolls back the profile and the proposal; a retry then succeeds', async () => {
     await setup();
     seedExperiment('shorter_vs_longer', { metrics: [0.9, 0.55] });
     const [p] = (await generate()).created;
-    await putProfile({ ...baseProfile, availableMinutes: 45 });
-    expect((await list())[0].stale).toBe(true);
+    const workouts = workoutCount();
+    const updatedAt = await profileUpdatedAt();
 
-    await post(`/api/adaptations/${p.id}/accept`);
-    const res = await post(`/api/adaptations/${p.id}/apply`);
-    expect(res.statusCode).toBe(409);
-    expect((await currentProfile()).profile.availableMinutes).toBe(45); // untouched
-    expect((await list())[0].proposal.status).toBe('accepted'); // can still be declined
+    breakWorkoutInserts();
+    const failed = await post(`/api/adaptations/${p.id}/approve`);
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json().error.code).toBe('database_error');
+
+    // Nothing changed: profile, workouts and proposal are exactly as before.
+    expect((await currentProfile()).profile.availableMinutes).toBe(30);
+    expect(await profileUpdatedAt()).toBe(updatedAt);
+    expect(workoutCount()).toBe(workouts);
+    const [item] = await list();
+    expect(item).toMatchObject({ stale: false, proposal: { status: 'pending', decidedAt: null, appliedAt: null, appliedWorkoutId: null } });
+
+    // Retry after the fault is gone.
+    repairWorkoutInserts();
+    const retried = applyResponseSchema.parse((await post(`/api/adaptations/${p.id}/approve`)).json());
+    expect(retried.proposal.status).toBe('applied');
+    expect((await currentProfile()).profile.availableMinutes).toBe(15);
+    expect(workoutCount()).toBe(workouts + 1);
   });
 
-  it('answers 404 for unknown proposals', async () => {
+  it('a failed auto-apply is rolled back and leaves the proposal pending for the user', async () => {
     await setup();
-    expect((await post('/api/adaptations/00000000-0000-4000-8000-000000000000/accept')).statusCode).toBe(404);
+    seedExperiment('morning_vs_evening', { metrics: [0.4, 0.85] }); // minor + real: would auto-apply
+    const workouts = workoutCount();
+    breakWorkoutInserts();
+
+    const res = await generate();
+    expect(res.created).toHaveLength(1);
+    expect(res.created[0]).toMatchObject({ status: 'pending', appliedAt: null });
+    expect((await currentProfile()).profile.schedule.preferredTimes).toEqual([]);
+    expect(workoutCount()).toBe(workouts);
+
+    repairWorkoutInserts();
+    const applied = applyResponseSchema.parse((await post(`/api/adaptations/${res.created[0].id}/approve`)).json());
+    expect(applied.proposal.status).toBe('applied');
+    expect((await currentProfile()).profile.schedule.preferredTimes).toEqual(['evening']);
+  });
+});
+
+describe('stale proposals are recoverable', () => {
+  it('a stale proposal cannot be applied, but can be updated to the current settings and then applied', async () => {
+    await setup();
+    seedExperiment('shorter_vs_longer', { metrics: [0.9, 0.55] }); // shorter wins
+    const [p] = (await generate()).created;
+    await putProfile({ ...baseProfile, availableMinutes: 45 });
+    expect((await list())[0]).toMatchObject({ stale: true, proposal: { status: 'pending' } });
+
+    const refused = await post(`/api/adaptations/${p.id}/approve`);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.message).toMatch(/Update the proposal to your current settings, or decline it/);
+    expect((await currentProfile()).profile.availableMinutes).toBe(45);
+
+    const refreshed = proposalResponseSchema.parse((await post(`/api/adaptations/${p.id}/refresh`)).json()).proposal;
+    expect(refreshed).toMatchObject({ id: p.id, status: 'pending', experimentId: p.experimentId, changes: [{ parameter: 'workout_duration', from: 45, to: 15 }] });
+    const items = await list();
+    expect(items).toHaveLength(1); // still one proposal for the experiment
+    expect(items[0].stale).toBe(false);
+
+    expect(applyResponseSchema.parse((await post(`/api/adaptations/${p.id}/approve`)).json()).proposal.status).toBe('applied');
+    expect((await currentProfile()).profile.availableMinutes).toBe(15);
+  });
+
+  it('when the settings already match, updating explains why and the proposal can still be declined', async () => {
+    await setup();
+    seedExperiment('shorter_vs_longer', { metrics: [0.9, 0.55] });
+    const [p] = (await generate()).created;
+    await putProfile({ ...baseProfile, availableMinutes: 15 }); // user already chose the shorter option
+    const res = await post(`/api/adaptations/${p.id}/refresh`);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/already match the better option/);
+    expect((await post(`/api/adaptations/${p.id}/decline`)).statusCode).toBe(200);
+  });
+
+  it('refresh is only for open, stale proposals and never creates duplicates', async () => {
+    await setup();
+    const e = seedExperiment('shorter_vs_longer', { metrics: [0.9, 0.55] });
+    const [p] = (await generate()).created;
+    expect((await post(`/api/adaptations/${p.id}/refresh`)).statusCode).toBe(409); // not stale
+    await post(`/api/adaptations/${p.id}/decline`);
+    expect((await post(`/api/adaptations/${p.id}/refresh`)).statusCode).toBe(409); // closed
+    expect((await generate()).skipped).toEqual([{ experimentId: e.id, reason: 'already_proposed' }]);
+    expect(await list()).toHaveLength(1);
+  });
+
+  it('reordering preferred times is not a settings change', async () => {
+    await setup();
+    await putProfile({ ...baseProfile, schedule: { ...baseProfile.schedule, preferredTimes: ['morning', 'evening'] } });
+    seedExperiment('morning_vs_evening', { metrics: [0.9, 0.5], isSimulated: true }); // simulated: stays pending
+    const [p] = (await generate()).created;
+    expect(p.changes[0]).toMatchObject({ from: ['morning', 'evening'], to: ['morning'] });
+    await putProfile({ ...baseProfile, schedule: { ...baseProfile.schedule, preferredTimes: ['evening', 'morning'] } });
+    expect((await list())[0].stale).toBe(false);
+    expect((await post(`/api/adaptations/${p.id}/approve`)).statusCode).toBe(200);
   });
 });
 
@@ -224,8 +335,7 @@ describe('restrictions are never violated', () => {
     await setup(restrictions);
     seedExperiment('shorter_vs_longer', { metrics: [0.9, 0.55] });
     const [p] = (await generate()).created;
-    await post(`/api/adaptations/${p.id}/accept`);
-    const applied = applyResponseSchema.parse((await post(`/api/adaptations/${p.id}/apply`)).json());
+    const applied = applyResponseSchema.parse((await post(`/api/adaptations/${p.id}/approve`)).json());
 
     const cur = await currentProfile();
     expect(cur.constraints).toMatchObject(restrictions);

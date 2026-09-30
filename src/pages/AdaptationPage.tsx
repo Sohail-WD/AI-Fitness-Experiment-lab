@@ -27,7 +27,7 @@ function formatValue(parameter: string, v: ChangeValue): string {
 
 const STATUS: Record<AdaptationProposal['status'], string> = {
   pending: 'Waiting for your decision',
-  accepted: 'Accepted, not yet applied',
+  accepted: 'Approved, not yet applied',
   declined: 'Declined',
   applied: 'Applied',
   auto_applied: 'Applied automatically (small change)',
@@ -74,12 +74,13 @@ interface CardProps {
   stale: boolean;
   experiment: Experiment | undefined;
   busy: boolean;
-  onAccept: (p: AdaptationProposal) => void;
+  onApprove: (p: AdaptationProposal) => void;
   onDecline: (p: AdaptationProposal) => void;
-  onApply: (p: AdaptationProposal) => void;
+  onRefresh: (p: AdaptationProposal) => void;
 }
 
-function ProposalCard({ proposal: p, stale, experiment, busy, onAccept, onDecline, onApply }: CardProps) {
+function ProposalCard({ proposal: p, stale, experiment, busy, onApprove, onDecline, onRefresh }: CardProps) {
+  const open = p.status === 'pending' || p.status === 'accepted';
   return (
     <article className="panel experiment" aria-label={`Proposal: ${p.title}`}>
       <p className="runner-label">
@@ -99,29 +100,28 @@ function ProposalCard({ proposal: p, stale, experiment, busy, onAccept, onDeclin
         {when(p.resultComputedAt)}. <a href="#/experiments">Experiment</a> · <a href="#/insights">Insight</a>
       </p>
       <ChangeTable changes={p.changes} stale={stale} />
-      {stale && (
+      {open && stale && (
         <p className="notice" role="status">
-          Your settings changed since this was proposed, so it can no longer be applied. Decline it and check again.
+          Your settings changed since this was proposed. Update it to your current settings, or decline it.
         </p>
       )}
 
-      <div className="controls">
-        {p.status === 'pending' && (
-          <>
-            <button type="button" onClick={() => onAccept(p)} disabled={busy || stale}>
+      {open && (
+        <div className="controls">
+          {stale ? (
+            <button type="button" onClick={() => onRefresh(p)} disabled={busy}>
+              Update to my current settings
+            </button>
+          ) : (
+            <button type="button" onClick={() => onApprove(p)} disabled={busy}>
               Accept and apply
             </button>
-            <button type="button" className="secondary" onClick={() => onDecline(p)} disabled={busy}>
-              Decline
-            </button>
-          </>
-        )}
-        {p.status === 'accepted' && (
-          <button type="button" onClick={() => onApply(p)} disabled={busy || stale}>
-            Apply now
+          )}
+          <button type="button" className="secondary" onClick={() => onDecline(p)} disabled={busy}>
+            Decline
           </button>
-        )}
-      </div>
+        </div>
+      )}
       {(p.status === 'applied' || p.status === 'auto_applied') && (
         <p className="success">
           Applied {when(p.appliedAt)}. Your next workout was generated with the new setting.{' '}
@@ -179,15 +179,18 @@ export function AdaptationPage() {
       return parts.join(' ');
     });
 
-  const applyRequest = (p: AdaptationProposal) => apiSend('POST', `/adaptations/${p.id}/apply`, {}, applyResponseSchema);
-  const accept = (p: AdaptationProposal) =>
+  // One atomic server operation: on failure the proposal stays open and can be retried or declined.
+  const approve = (p: AdaptationProposal) =>
     run(async () => {
-      await apiSend('POST', `/adaptations/${p.id}/accept`, {}, proposalResponseSchema);
-      await applyRequest(p); // accepted stays visible with a retry button if applying fails
+      await apiSend('POST', `/adaptations/${p.id}/approve`, {}, applyResponseSchema);
       return 'Applied. Your next workout was generated with the new setting.';
     });
   const decline = (p: AdaptationProposal) => run(async () => void (await apiSend('POST', `/adaptations/${p.id}/decline`, {}, proposalResponseSchema)));
-  const apply = (p: AdaptationProposal) => run(async () => void (await applyRequest(p)));
+  const refresh = (p: AdaptationProposal) =>
+    run(async () => {
+      await apiSend('POST', `/adaptations/${p.id}/refresh`, {}, proposalResponseSchema);
+      return 'Proposal updated to your current settings.';
+    });
 
   return (
     <section aria-labelledby="adaptation-title">
@@ -227,9 +230,9 @@ export function AdaptationPage() {
           stale={stale}
           experiment={proposal.experimentId ? experiments.get(proposal.experimentId) : undefined}
           busy={busy}
-          onAccept={accept}
+          onApprove={approve}
           onDecline={decline}
-          onApply={apply}
+          onRefresh={refresh}
         />
       ))}
     </section>

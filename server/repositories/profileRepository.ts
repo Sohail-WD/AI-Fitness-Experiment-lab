@@ -4,7 +4,7 @@ import {
   type ProfileResponse,
   profileResponseSchema,
 } from '../../shared/schemas/profile.ts';
-import type { Database } from '../db/database.ts';
+import { type Database, withTransaction } from '../db/database.ts';
 import { AppError } from '../errors.ts';
 
 /**
@@ -67,43 +67,43 @@ export function getProfile(db: Database): ProfileResponse | null {
 }
 
 export function saveProfile(db: Database, input: ProfileInput): ProfileResponse {
+  withTransaction(db, () => writeProfile(db, input));
+  return getProfile(db)!;
+}
+
+/**
+ * Write the profile and constraints WITHOUT managing a transaction. Callers
+ * must already be inside one (see withTransaction) so both rows change together.
+ */
+export function writeProfile(db: Database, input: ProfileInput): void {
   const existing = getProfile(db);
   const id = existing?.profile.id ?? randomUUID();
   const now = new Date().toISOString();
   const p = input.profile;
   const c = input.constraints;
-
-  db.exec('BEGIN');
-  try {
-    db.prepare(
-      `INSERT INTO user_profiles (id, name, fitness_level, training_context, goals, equipment, environment, available_minutes, schedule, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (id) DO UPDATE SET
-         name = excluded.name, fitness_level = excluded.fitness_level, training_context = excluded.training_context,
-         goals = excluded.goals, equipment = excluded.equipment, environment = excluded.environment,
-         available_minutes = excluded.available_minutes, schedule = excluded.schedule, updated_at = excluded.updated_at`,
-    ).run(
-      id,
-      p.name,
-      p.fitnessLevel,
-      p.trainingContext,
-      JSON.stringify(p.goals),
-      JSON.stringify(p.equipment),
-      JSON.stringify(p.environment),
-      p.availableMinutes,
-      JSON.stringify(p.schedule),
-      existing?.profile.createdAt ?? now,
-      now,
-    );
-    db.prepare(
-      `INSERT INTO user_constraints (user_id, restriction_tags, notes, source, updated_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (user_id) DO UPDATE SET
-         restriction_tags = excluded.restriction_tags, notes = excluded.notes, source = excluded.source, updated_at = excluded.updated_at`,
-    ).run(id, JSON.stringify(c.restrictionTags), c.notes, c.source, now);
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-  return getProfile(db)!;
+  db.prepare(
+    `INSERT INTO user_profiles (id, name, fitness_level, training_context, goals, equipment, environment, available_minutes, schedule, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO UPDATE SET
+       name = excluded.name, fitness_level = excluded.fitness_level, training_context = excluded.training_context,
+       goals = excluded.goals, equipment = excluded.equipment, environment = excluded.environment,
+       available_minutes = excluded.available_minutes, schedule = excluded.schedule, updated_at = excluded.updated_at`,
+  ).run(
+    id,
+    p.name,
+    p.fitnessLevel,
+    p.trainingContext,
+    JSON.stringify(p.goals),
+    JSON.stringify(p.equipment),
+    JSON.stringify(p.environment),
+    p.availableMinutes,
+    JSON.stringify(p.schedule),
+    existing?.profile.createdAt ?? now,
+    now,
+  );
+  db.prepare(
+    `INSERT INTO user_constraints (user_id, restriction_tags, notes, source, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (user_id) DO UPDATE SET
+       restriction_tags = excluded.restriction_tags, notes = excluded.notes, source = excluded.source, updated_at = excluded.updated_at`,
+  ).run(id, JSON.stringify(c.restrictionTags), c.notes, c.source, now);
 }

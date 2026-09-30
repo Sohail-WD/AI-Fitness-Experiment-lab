@@ -10,6 +10,7 @@ import {
   proposalSignificance,
   type ProposalDraft,
   proposeFromExperiment,
+  sameConfigValue,
   transitionProposal,
   violatesRestrictions,
 } from '../../shared/adaptation/engine';
@@ -161,6 +162,34 @@ describe('restrictions', () => {
     expect(() => applyChangesToProfile(input, [{ parameter: 'difficulty', from: 'a', to: 'b' }])).toThrow(AdaptationApplyError);
   });
 
+  it('compares preferred times as sets (order-independent)', () => {
+    const timing = (from: string[]): AdaptationChange[] => [{ parameter: 'workout_timing', from, to: ['morning'] }];
+    const withTimes = (t: ('morning' | 'afternoon' | 'evening')[]) => ({ ...profile, schedule: { ...profile.schedule, preferredTimes: t } });
+    // same values, different order → not stale
+    expect(isStale(withTimes(['evening', 'morning']), timing(['morning', 'evening']))).toBe(false);
+    expect(sameConfigValue(['morning', 'evening'], ['evening', 'morning'])).toBe(true);
+    // added value → changed
+    expect(isStale(withTimes(['morning', 'evening', 'afternoon']), timing(['morning', 'evening']))).toBe(true);
+    // removed value → changed
+    expect(isStale(withTimes(['morning']), timing(['morning', 'evening']))).toBe(true);
+    // empty vs non-empty → changed (both directions)
+    expect(isStale(withTimes([]), timing(['morning']))).toBe(true);
+    expect(isStale(withTimes(['morning']), timing([]))).toBe(true);
+    expect(isStale(withTimes([]), timing([]))).toBe(false);
+    // numbers still compare by value
+    expect(sameConfigValue(30, 30)).toBe(true);
+    expect(sameConfigValue(30, 15)).toBe(false);
+  });
+
+  it('stored order is preserved: applying keeps the proposed list as written', () => {
+    const input = {
+      profile: { name: 'A', fitnessLevel: 'beginner' as const, goals: ['general_fitness' as const], trainingContext: 'sedentary' as const, equipment: [], environment: { location: 'home' as const }, availableMinutes: 30, schedule: { preferredDays: [], preferredTimes: [], workoutsPerWeek: 3 } },
+      constraints: { restrictionTags: [], notes: '', source: 'self_reported' as const },
+    };
+    const next = applyChangesToProfile(input, [{ parameter: 'workout_timing', from: [], to: ['evening', 'morning'] }]);
+    expect(next.profile.schedule.preferredTimes).toEqual(['evening', 'morning']);
+  });
+
   it('detects when the configuration changed since a proposal was made', () => {
     const changes: AdaptationChange[] = [{ parameter: 'workout_duration', from: 30, to: 15 }];
     expect(isStale({ ...profile, availableMinutes: 30 }, changes)).toBe(false);
@@ -181,10 +210,23 @@ describe('proposal lifecycle', () => {
     expect(adaptationProposalSchema.safeParse(applied).success).toBe(true);
   });
 
+  it('approve: pending (or legacy accepted) → applied in one step', () => {
+    const applied = transitionProposal(pending, 'approve', NOW, WORKOUT);
+    expect(applied).toMatchObject({ status: 'applied', decidedAt: NOW.toISOString(), appliedAt: NOW.toISOString(), appliedWorkoutId: WORKOUT });
+    expect(adaptationProposalSchema.safeParse(applied).success).toBe(true);
+    const legacy = transitionProposal(pending, 'accept', new Date('2026-09-30T00:00:00Z'));
+    expect(transitionProposal(legacy, 'approve', NOW, WORKOUT)).toMatchObject({ status: 'applied', decidedAt: '2026-09-30T00:00:00.000Z' });
+    expect(() => transitionProposal(applied, 'approve', NOW)).toThrow(AdaptationTransitionError);
+  });
+
+  it('decline works from every open state (pending and legacy accepted)', () => {
+    expect(transitionProposal(transitionProposal(pending, 'accept', NOW), 'decline', NOW).status).toBe('declined');
+  });
+
   it('pending → declined, and a declined proposal is final', () => {
     const declined = transitionProposal(pending, 'decline', NOW);
     expect(declined).toMatchObject({ status: 'declined', decidedAt: NOW.toISOString() });
-    for (const a of ['accept', 'decline', 'apply', 'auto_apply'] as const) expect(() => transitionProposal(declined, a, NOW)).toThrow(AdaptationTransitionError);
+    for (const a of ['approve', 'accept', 'decline', 'apply', 'auto_apply'] as const) expect(() => transitionProposal(declined, a, NOW)).toThrow(AdaptationTransitionError);
   });
 
   it('a significant change can only be applied after the user accepted it', () => {

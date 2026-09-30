@@ -63,6 +63,22 @@ export function seedExerciseLibrary(db: Database): void {
   }
 }
 
+/**
+ * Run `fn` in one transaction: commit if it returns, roll back everything if it
+ * throws. Not re-entrant — code called inside must not start its own transaction.
+ */
+export function withTransaction<T>(db: Database, fn: () => T): T {
+  db.exec('BEGIN');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 export function isDatabaseHealthy(db: Database): boolean {
   try {
     db.prepare('SELECT 1').get();
