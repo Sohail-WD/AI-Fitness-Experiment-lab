@@ -11,6 +11,7 @@ import {
 } from '../../shared/schemas/adaptation';
 import { type Experiment, experimentListSchema } from '../../shared/schemas/experiment';
 import { apiGet, apiSend } from '../lib/api';
+import { Loading, PageError } from '../components/PageStatus';
 
 const PARAM_LABEL: Record<string, string> = {
   workout_duration: 'Workout length',
@@ -211,11 +212,8 @@ export function AdaptationPage() {
           {message}
         </p>
       )}
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <PageError message={error} />}
+      {!items && !error && <Loading what="proposals" />}
       {items?.length === 0 && (
         <div className="panel">
           <p>

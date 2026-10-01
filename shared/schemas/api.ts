@@ -10,6 +10,7 @@ export const apiErrorSchema = z.object({
       'conflict',
       'unprocessable',
       'not_implemented',
+      'rate_limited',
       'database_error',
       'service_unavailable',
       'internal_error',

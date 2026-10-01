@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 /** Thrown when environment variables are missing or invalid. The server refuses to start. */
@@ -15,10 +16,19 @@ export interface AppConfig {
   /** Groq model used for analysis text. */
   groqModel: string;
   nodeEnv: 'development' | 'production' | 'test';
+  /** Built frontend directory served by the API (production); null = not served (Vite serves it in dev). */
+  staticDir: string | null;
+  /** The only cross-origin browser origin allowed to call the API; null = same-origin only. */
+  corsOrigin: string | null;
+  /** Max AI analysis requests per client per minute. */
+  aiRateLimitPerMinute: number;
 }
 
+/** Default location of `npm run build` output. */
+export const DEFAULT_STATIC_DIR = fileURLToPath(new URL('../dist', import.meta.url));
+
 /** Default Groq model (override with GROQ_MODEL if it is retired or you prefer another). */
-export const DEFAULT_GROQ_MODEL = 'llama-3.3-70b-versatile';
+export const DEFAULT_GROQ_MODEL = 'openai/gpt-oss-120b';
 
 /** Treat empty strings (e.g. `KEY=` copied from .env.example) as unset. */
 const optionalString = z.preprocess((v) => (v === '' ? undefined : v), z.string().optional());
@@ -30,6 +40,11 @@ const envSchema = z.object({
   DATABASE_URL: optionalString,
   GROQ_API_KEY: optionalString,
   GROQ_MODEL: optionalString,
+  /** "true" serves the built frontend outside production too (e.g. local preview of the build). */
+  SERVE_FRONTEND: z.enum(['true', 'false']).optional(),
+  STATIC_DIR: optionalString,
+  CORS_ORIGIN: optionalString,
+  AI_RATE_LIMIT_PER_MINUTE: z.preprocess((v) => (v === '' ? undefined : v), z.coerce.number().int().min(1).max(1000).default(10)),
 });
 
 const DEFAULT_DATABASE_URL = 'file:./data/fitness-lab.db';
@@ -39,6 +54,20 @@ export function parseDatabaseUrl(url: string): string {
   if (url === ':memory:') return url;
   if (url.startsWith('file:') && url.length > 'file:'.length) return url.slice('file:'.length);
   throw new ConfigError(`DATABASE_URL must be "file:<path>" or ":memory:" (got "${url}")`);
+}
+
+/** A browser origin: scheme + host (+ port), nothing else. */
+export function parseOrigin(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ConfigError(`CORS_ORIGIN must be an origin like "https://app.example.com" (got "${value}")`);
+  }
+  if (!/^https?:$/.test(url.protocol) || url.origin !== value.replace(/\/$/, '')) {
+    throw new ConfigError(`CORS_ORIGIN must be an origin like "https://app.example.com" (got "${value}")`);
+  }
+  return url.origin;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -61,5 +90,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     groqApiKey: e.GROQ_API_KEY ?? null,
     groqModel: e.GROQ_MODEL ?? DEFAULT_GROQ_MODEL,
     nodeEnv: e.NODE_ENV,
+    staticDir:
+      e.NODE_ENV === 'production' || e.SERVE_FRONTEND === 'true' ? (e.STATIC_DIR ?? DEFAULT_STATIC_DIR) : null,
+    corsOrigin: e.CORS_ORIGIN ? parseOrigin(e.CORS_ORIGIN) : null,
+    aiRateLimitPerMinute: e.AI_RATE_LIMIT_PER_MINUTE,
   };
 }

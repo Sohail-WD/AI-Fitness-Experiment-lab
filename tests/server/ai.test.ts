@@ -227,6 +227,15 @@ describe('Groq client', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer gsk-secret');
     expect(JSON.parse(init.body as string)).toMatchObject({ model: 'm1', messages, response_format: { type: 'json_object' }, temperature: 0.2 });
     expect(client).toMatchObject({ provider: 'groq', model: 'm1' });
+    expect(JSON.parse(init.body as string)).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('asks gpt-oss reasoning models for low reasoning effort so the JSON fits the token budget', async () => {
+    const fetchImpl = vi.fn(async () => okBody('{"ok":true}'));
+    const client = createGroqClient({ apiKey: 'gsk-secret', model: 'openai/gpt-oss-120b', fetchImpl: fetchImpl as unknown as typeof fetch });
+    await client.completeJson(messages);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({ reasoning_effort: 'low', max_tokens: 2000 });
   });
 
   it.each([

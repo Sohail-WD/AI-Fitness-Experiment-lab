@@ -1,18 +1,26 @@
 import type { FastifyInstance } from 'fastify';
 import type { AnalysisReport } from '../../shared/schemas/ai.ts';
 import type { AnalysisService } from '../ai/analysisService.ts';
+import { createRateLimiter } from '../http.ts';
 import type { Database } from '../db/database.ts';
 import { AppError } from '../errors.ts';
 import { getExperiment, getResult } from '../repositories/experimentRepository.ts';
 
 type IdParams = { Params: { id: string } };
 
-export function registerAiRoutes(app: FastifyInstance, deps: { db: Database; ai: AnalysisService }): void {
+export function registerAiRoutes(app: FastifyInstance, deps: { db: Database; ai: AnalysisService; rateLimitPerMinute: number }): void {
+  const limiter = createRateLimiter(deps.rateLimitPerMinute, 60_000);
+
   /**
    * Analyse a started experiment's stored result. Only the deterministic result
    * reaches the analysis service; the report is generated on demand, not stored.
    */
-  app.post<IdParams>('/api/ai/experiments/:id/analysis', async (request): Promise<AnalysisReport> => {
+  app.post<IdParams>('/api/ai/experiments/:id/analysis', async (request, reply): Promise<AnalysisReport> => {
+    const wait = limiter.hit(request.ip);
+    if (wait > 0) {
+      reply.header('Retry-After', String(wait));
+      throw new AppError(429, 'rate_limited', `Too many analysis requests. Try again in ${wait} seconds.`);
+    }
     const experiment = getExperiment(deps.db, request.params.id);
     if (!experiment) throw new AppError(404, 'not_found', `Experiment "${request.params.id}" not found`);
     if (experiment.status === 'proposed' || experiment.status === 'skipped') {

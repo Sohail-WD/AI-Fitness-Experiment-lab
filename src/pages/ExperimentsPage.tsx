@@ -6,6 +6,7 @@ import {
   experimentWithResultSchema,
 } from '../../shared/schemas/experiment';
 import { ApiError, apiGet, apiSend } from '../lib/api';
+import { Loading, PageError } from '../components/PageStatus';
 
 const METRIC_LABEL = {
   adherence: 'Adherence (planned workouts completed)',
@@ -140,11 +141,8 @@ export function ExperimentsPage() {
         <h2 id="experiments-title">Experiments</h2>
         <p className="subtitle">Personal A/B comparisons computed from your sessions by fixed rules (no AI).</p>
       </div>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <PageError message={error} />}
+      {!items && !error && <Loading what="experiments" />}
 
       {current ? (
         <ExperimentCard item={current} onAction={act} busy={busy} />

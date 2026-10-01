@@ -8,8 +8,11 @@ describe('loadConfig', () => {
       host: '127.0.0.1',
       databasePath: './data/fitness-lab.db',
       groqApiKey: null,
-      groqModel: 'llama-3.3-70b-versatile',
+      groqModel: 'openai/gpt-oss-120b',
       nodeEnv: 'development',
+      staticDir: null,
+      corsOrigin: null,
+      aiRateLimitPerMinute: 10,
     });
   });
 

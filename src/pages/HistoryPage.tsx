@@ -9,6 +9,7 @@ import {
 } from '../../shared/schemas/history';
 import { SessionDetails, issueLabel } from '../history/SessionDetails';
 import { ApiError, apiGet, apiSend } from '../lib/api';
+import { Loading, PageError } from '../components/PageStatus';
 
 const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v * 100)}%`);
 const minutes = (s: number | null) => (s === null ? '—' : `${Math.max(1, Math.round(s / 60))} min`);
@@ -115,11 +116,8 @@ export function HistoryPage() {
             : 'Mixed view: real and SIMULATED sessions together. Simulated rows are labelled.'}
         </p>
       )}
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <PageError message={error} />}
+      {!data && !error && <Loading what="history" />}
 
       {m && (
         <>

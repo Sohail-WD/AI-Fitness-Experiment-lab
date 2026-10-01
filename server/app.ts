@@ -4,6 +4,7 @@ import { createLlmFromConfig } from './ai/groqClient.ts';
 import type { AppConfig } from './config.ts';
 import type { Database } from './db/database.ts';
 import { registerErrorHandling } from './errors.ts';
+import { registerHttpHardening } from './http.ts';
 import { registerAdaptationRoutes } from './routes/adaptations.ts';
 import { registerAiRoutes } from './routes/ai.ts';
 import { registerExerciseRoutes } from './routes/exercises.ts';
@@ -13,6 +14,7 @@ import { registerHistoryRoutes } from './routes/history.ts';
 import { registerProfileRoutes } from './routes/profile.ts';
 import { registerSessionRoutes } from './routes/sessions.ts';
 import { registerWorkoutRoutes } from './routes/workouts.ts';
+import { registerStaticFrontend } from './static.ts';
 
 export interface AppDeps {
   config: AppConfig;
@@ -27,6 +29,7 @@ export function buildApp({ config, db, ai }: AppDeps): FastifyInstance {
   const analysis = ai ?? createAnalysisService({ llm: createLlmFromConfig(config), log: (m) => app.log.warn(m) });
 
   registerErrorHandling(app);
+  registerHttpHardening(app, { corsOrigin: config.corsOrigin });
   registerHealthRoutes(app, { db, ai: analysis });
   registerExerciseRoutes(app, { db });
   registerProfileRoutes(app, { db });
@@ -34,8 +37,10 @@ export function buildApp({ config, db, ai }: AppDeps): FastifyInstance {
   registerSessionRoutes(app, { db });
   registerHistoryRoutes(app, { db });
   registerExperimentRoutes(app, { db });
-  registerAiRoutes(app, { db, ai: analysis });
+  registerAiRoutes(app, { db, ai: analysis, rateLimitPerMinute: config.aiRateLimitPerMinute });
   registerAdaptationRoutes(app, { db });
+  // Production: serve the built frontend from this server (one origin, no CORS needed).
+  if (config.staticDir) registerStaticFrontend(app, config.staticDir);
 
   return app;
 }

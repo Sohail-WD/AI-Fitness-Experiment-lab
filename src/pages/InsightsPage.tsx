@@ -4,6 +4,7 @@ import { type AnalysisReport, analysisReportSchema, type FallbackReason } from '
 import { healthResponseSchema } from '../../shared/schemas/api';
 import { type ExperimentWithResult, experimentListSchema } from '../../shared/schemas/experiment';
 import { apiGet, apiSend } from '../lib/api';
+import { Loading, PageError } from '../components/PageStatus';
 
 const FALLBACK_TEXT: Record<FallbackReason, string> = {
   no_api_key: 'No AI key is configured, so this is a fixed-template summary.',
@@ -140,11 +141,8 @@ export function InsightsPage() {
           number it uses is checked against them.
         </p>
       </div>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <PageError message={error} />}
+      {!items && !error && <Loading what="experiments" />}
       {items?.length === 0 && (
         <div className="panel">
           <p>

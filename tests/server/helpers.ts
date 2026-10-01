@@ -7,4 +7,7 @@ export const testConfig: AppConfig = {
   groqApiKey: null,
   groqModel: 'test-model',
   nodeEnv: 'test',
+  staticDir: null,
+  corsOrigin: null,
+  aiRateLimitPerMinute: 1000,
 };

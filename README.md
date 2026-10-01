@@ -72,6 +72,21 @@ tests/                  M0 tests at top level; shared/ and server/ subfolders
   number not in the supplied facts, or uses medical/diagnostic/causal/scientific-certainty wording. Set `GROQ_API_KEY` (and
   optionally `GROQ_MODEL`) in `.env` to enable it; without a key the app shows deterministic summaries.
 
+### Production / deployment (M10)
+
+```bash
+npm ci && npm run build        # typecheck + frontend bundle into dist/ (incl. MediaPipe wasm)
+NODE_ENV=production DATABASE_URL=file:./data/fitness-lab.db HOST=0.0.0.0 PORT=3001 npm start
+```
+
+In production one Node process serves both the API and the built frontend (SPA fallback to `index.html`; hashed assets
+cached for a year; `.wasm` served as `application/wasm`). Camera access requires HTTPS on any host other than
+`localhost`, so put the server behind a TLS-terminating proxy or platform. Environment: `NODE_ENV`, `DATABASE_URL`
+(required in production; use a persistent disk), `HOST`, `PORT`, optional `GROQ_API_KEY` / `GROQ_MODEL`,
+`AI_RATE_LIMIT_PER_MINUTE` (default 10 per IP), and `CORS_ORIGIN` only if the frontend is hosted elsewhere. API responses
+carry `nosniff`, `no-referrer`, `X-Frame-Options: DENY` and a camera-only `Permissions-Policy`. The AI endpoint returns
+`429` with `Retry-After` when rate-limited.
+
 ### Database
 
 SQLite at `data/fitness-lab.db` (git-ignored), created and migrated on

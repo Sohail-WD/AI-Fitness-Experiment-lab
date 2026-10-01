@@ -4,6 +4,11 @@ import { type LlmClient, LlmError, type LlmMessage } from './llm.ts';
 /** Groq's OpenAI-compatible chat completions endpoint. */
 export const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const DEFAULT_TIMEOUT_MS = 20_000;
+/** Output budget. Reasoning models count hidden reasoning against it, so it is larger than the JSON itself needs. */
+const MAX_TOKENS = 2000;
+
+/** Groq's gpt-oss models reason before answering; low effort keeps replies fast and within the token budget. */
+export const isReasoningModel = (model: string) => model.startsWith('openai/gpt-oss');
 
 export interface GroqOptions {
   apiKey: string;
@@ -34,8 +39,9 @@ export function createGroqClient(options: GroqOptions): LlmClient {
             model,
             messages,
             temperature: 0.2,
-            max_tokens: 900,
+            max_tokens: MAX_TOKENS,
             response_format: { type: 'json_object' },
+            ...(isReasoningModel(model) ? { reasoning_effort: 'low' } : {}),
           }),
           signal: AbortSignal.timeout(timeoutMs),
         });
