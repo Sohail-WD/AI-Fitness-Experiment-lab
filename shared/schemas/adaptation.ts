@@ -82,4 +82,5 @@ export const generateAdaptationsResponseSchema = z.object({
   skipped: z.array(z.object({ experimentId: idSchema, reason: skipReasonSchema })),
 });
 export const proposalResponseSchema = z.object({ proposal: adaptationProposalSchema });
-export const applyResponseSchema = z.object({ proposal: adaptationProposalSchema, workout: workoutSchema });
+/** `effects`: what applying actually changed in the next workout (empty only for old responses). */
+export const applyResponseSchema = z.object({ proposal: adaptationProposalSchema, workout: workoutSchema, effects: z.array(z.string()).default([]) });

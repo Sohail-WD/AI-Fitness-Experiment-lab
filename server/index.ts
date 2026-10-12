@@ -1,6 +1,7 @@
 import { buildApp } from './app.ts';
 import { type AppConfig, ConfigError, loadConfig } from './config.ts';
 import { type Database, openDatabase } from './db/database.ts';
+import { purgeInactiveVisitors } from './visitors.ts';
 
 function fail(message: string): never {
   console.error(`\n[server] ${message}\n`);
@@ -22,6 +23,18 @@ try {
 }
 
 const app = buildApp({ config, db });
+
+// Retention: visitors inactive for VISITOR_RETENTION_DAYS are deleted with all their data, at startup and daily.
+const purge = () => {
+  try {
+    const removed = purgeInactiveVisitors(db, new Date(), config.visitorRetentionDays);
+    if (removed > 0) app.log.info(`purged ${removed} inactive visitor(s)`);
+  } catch (err) {
+    app.log.error(`visitor purge failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+};
+purge();
+setInterval(purge, 24 * 60 * 60 * 1000).unref();
 
 const shutdown = async (signal: string) => {
   app.log.info(`${signal} received, shutting down`);

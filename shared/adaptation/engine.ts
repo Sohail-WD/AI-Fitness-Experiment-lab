@@ -1,4 +1,4 @@
-import { describeResult } from '../experiments/engine.ts';
+import { describeResult, hasSufficientData } from '../experiments/engine.ts';
 import type {
   AdaptationChange,
   AdaptationProposal,
@@ -9,6 +9,7 @@ import type {
 import type { ExerciseDefinition } from '../schemas/exercise.ts';
 import type { Experiment, ExperimentMetric, ExperimentResult } from '../schemas/experiment.ts';
 import type { ProfileInput, UserConstraints, UserProfile } from '../schemas/profile.ts';
+import type { Workout } from '../schemas/workout.ts';
 
 /**
  * Adaptation engine (spec §16). Deterministic rules turn a completed
@@ -174,7 +175,10 @@ const skip = (reason: SkipReason): ProposeOutcome => ({ kind: 'skipped', reason 
  * between the two conditions.
  */
 export function proposeFromExperiment(experiment: Experiment, result: ExperimentResult | null, ctx: AdaptationContext): ProposeOutcome {
-  if (experiment.status !== 'completed' || !result || !result.sufficientData) return skip('insufficient_evidence');
+  // Never trust the stored flag alone: re-derive sufficiency from the observations themselves.
+  if (experiment.status !== 'completed' || !result || !result.sufficientData || !hasSufficientData(experiment, result.perCondition)) {
+    return skip('insufficient_evidence');
+  }
   if (!HIGHER_IS_BETTER.includes(experiment.primaryMetric)) return skip('no_rule');
 
   const a = result.perCondition.find((p) => p.conditionId === 'A')?.metricValue;
@@ -195,10 +199,14 @@ export function proposeFromExperiment(experiment: Experiment, result: Experiment
     title = `Prefer ${time} workouts`;
     action = `set your preferred workout time to ${time}`;
   } else if (experiment.variable === 'workout_duration') {
-    const { maxMinutes, minMinutes } = winner.parameters;
+    const { maxMinutes, minMinutes, durationMinutes } = winner.parameters;
     const current = ctx.profile.availableMinutes;
     let target: number;
-    if (typeof maxMinutes === 'number') {
+    if (typeof durationMinutes === 'number') {
+      // The experiment generated workouts at exactly this length: propose the nearest length the profile offers.
+      target = DURATION_OPTIONS.reduce((best, d) => (Math.abs(d - durationMinutes) < Math.abs(best - durationMinutes) ? d : best));
+      if (target === current) return skip('already_configured');
+    } else if (typeof maxMinutes === 'number') {
       const shorter = DURATION_OPTIONS.filter((d) => d <= maxMinutes);
       target = shorter.length ? shorter[shorter.length - 1] : DURATION_OPTIONS[0];
       if (target >= current) return skip('already_configured');
@@ -230,6 +238,31 @@ export function proposeFromExperiment(experiment: Experiment, result: Experiment
       isSimulated: experiment.isSimulated,
     },
   };
+}
+
+/* ---------- effects ---------- */
+
+type WorkoutFacts = Pick<Workout, 'estimatedMinutes'> & { requirements: Pick<Workout['requirements'], 'targetDurationMinutes' | 'preferredTimes' | 'workoutsPerWeek'> };
+
+/**
+ * What applying a proposal ACTUALLY changed in the next workout, by comparing it with the previous one.
+ * Only real differences are reported, so the UI never claims a change that did not happen.
+ */
+export function appliedEffects(changes: AdaptationChange[], next: WorkoutFacts, previous: WorkoutFacts | null): string[] {
+  const effects: string[] = [];
+  for (const c of changes) {
+    if (c.parameter === 'workout_duration' && next.requirements.targetDurationMinutes !== previous?.requirements.targetDurationMinutes) {
+      effects.push(`Your next workout is built for ${next.requirements.targetDurationMinutes} minutes (about ${next.estimatedMinutes} min).`);
+    }
+    if (c.parameter === 'workout_timing' && !sameConfigValue(next.requirements.preferredTimes, previous?.requirements.preferredTimes ?? [])) {
+      const times = next.requirements.preferredTimes.join(' and ');
+      effects.push(`Your next workout is now planned for ${times || 'any time'}. The time is shown on the workout plan; it does not change which exercises you get.`);
+    }
+    if (c.parameter === 'frequency' && next.requirements.workoutsPerWeek !== previous?.requirements.workoutsPerWeek) {
+      effects.push(`Your plan is now ${next.requirements.workoutsPerWeek} workouts per week.`);
+    }
+  }
+  return effects.length > 0 ? effects : ['Your settings were updated, but the next workout did not change.'];
 }
 
 /* ---------- lifecycle ---------- */

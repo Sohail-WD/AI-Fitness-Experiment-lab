@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   type ProfileInput,
   type ProfileResponse,
@@ -30,14 +29,15 @@ interface ProfileRow {
   constraints_updated_at: string | null;
 }
 
-export function getProfile(db: Database): ProfileResponse | null {
+/** The profile of one user (visitor). */
+export function getProfile(db: Database, userId: string): ProfileResponse | null {
   const row = db
     .prepare(
       `SELECT p.*, c.restriction_tags, c.notes, c.source, c.updated_at AS constraints_updated_at
        FROM user_profiles p LEFT JOIN user_constraints c ON c.user_id = p.id
-       ORDER BY p.created_at LIMIT 1`,
+       WHERE p.id = ?`,
     )
-    .get() as ProfileRow | undefined;
+    .get(userId) as ProfileRow | undefined;
   if (!row) return null;
 
   const parsed = profileResponseSchema.safeParse({
@@ -66,18 +66,18 @@ export function getProfile(db: Database): ProfileResponse | null {
   return parsed.data;
 }
 
-export function saveProfile(db: Database, input: ProfileInput): ProfileResponse {
-  withTransaction(db, () => writeProfile(db, input));
-  return getProfile(db)!;
+export function saveProfile(db: Database, userId: string, input: ProfileInput): ProfileResponse {
+  withTransaction(db, () => writeProfile(db, userId, input));
+  return getProfile(db, userId)!;
 }
 
 /**
  * Write the profile and constraints WITHOUT managing a transaction. Callers
  * must already be inside one (see withTransaction) so both rows change together.
  */
-export function writeProfile(db: Database, input: ProfileInput): void {
-  const existing = getProfile(db);
-  const id = existing?.profile.id ?? randomUUID();
+export function writeProfile(db: Database, userId: string, input: ProfileInput): void {
+  const existing = getProfile(db, userId);
+  const id = userId;
   const now = new Date().toISOString();
   const p = input.profile;
   const c = input.constraints;

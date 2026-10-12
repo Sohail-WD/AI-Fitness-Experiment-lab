@@ -5,13 +5,13 @@ import { type Database, openDatabase } from '../../server/db/database';
 import { apiErrorSchema } from '../../shared/schemas/api';
 import { type ProfileInput, profileResponseSchema } from '../../shared/schemas/profile';
 import { workoutSchema } from '../../shared/schemas/workout';
-import { testConfig } from './helpers';
+import { testConfig, withCookieJar } from './helpers';
 
 let db: Database;
 let app: FastifyInstance;
 beforeEach(() => {
   db = openDatabase(':memory:');
-  app = buildApp({ config: testConfig, db });
+  app = withCookieJar(buildApp({ config: testConfig, db }));
 });
 afterEach(async () => {
   await app.close();
@@ -67,8 +67,9 @@ describe('profile API', () => {
 describe('workout API', () => {
   it('requires a profile first', async () => {
     const res = await generate();
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.code).toBe('conflict');
+    expect(res.statusCode).toBe(401); // no demo session yet
+    expect(res.json().error.code).toBe('unauthorized');
+    expect(res.json().error.message).toMatch(/profile first/i);
   });
 
   it('generates, stores and returns the latest workout', async () => {

@@ -8,6 +8,7 @@ import {
   locationSchema,
   restrictionTagSchema,
   spaceSchema,
+  timeOfDaySchema,
   timestampSchema,
   trainingContextSchema,
 } from './common.ts';
@@ -41,6 +42,8 @@ export const workoutRequirementsSchema = z.object({
   location: locationSchema,
   space: spaceSchema,
   restrictions: z.array(restrictionTagSchema),
+  /** The user's preferred workout times (planning information; it does not change which exercises are chosen). */
+  preferredTimes: z.array(timeOfDaySchema).default([]),
   trainingParameters: trainingParametersSchema,
   /** Library exercises that pass every hard filter (equipment, restrictions, level, space). */
   eligibleExerciseIds: z.array(z.string()),
@@ -65,6 +68,14 @@ export const workoutItemSchema = z.object({
 });
 export type WorkoutItem = z.infer<typeof workoutItemSchema>;
 
+/** M11: the experiment condition this workout was generated for (null outside an experiment). */
+export const workoutAssignmentSchema = z.object({
+  experimentId: idSchema,
+  conditionId: z.enum(['A', 'B']),
+  label: z.string().min(1),
+});
+export type WorkoutAssignment = z.infer<typeof workoutAssignmentSchema>;
+
 export const workoutSchema = z.object({
   id: idSchema,
   userId: idSchema,
@@ -76,6 +87,7 @@ export const workoutSchema = z.object({
   requirements: workoutRequirementsSchema,
   items: z.array(workoutItemSchema).min(1),
   scheduledFor: dateSchema.nullable(),
+  assignment: workoutAssignmentSchema.nullable().default(null),
   estimatedMinutes: z.int().positive(),
   createdAt: timestampSchema,
 });

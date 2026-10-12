@@ -6,6 +6,8 @@ export const apiErrorSchema = z.object({
   error: z.object({
     code: z.enum([
       'validation_error',
+      'unauthorized',
+      'forbidden',
       'not_found',
       'conflict',
       'unprocessable',

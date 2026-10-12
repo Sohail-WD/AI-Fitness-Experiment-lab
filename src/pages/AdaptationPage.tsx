@@ -125,7 +125,7 @@ function ProposalCard({ proposal: p, stale, experiment, busy, onApprove, onDecli
       )}
       {(p.status === 'applied' || p.status === 'auto_applied') && (
         <p className="success">
-          Applied {when(p.appliedAt)}. Your next workout was generated with the new setting.{' '}
+          Applied {when(p.appliedAt)}. Your settings were updated and a new workout was generated.{' '}
           <a href="#/workout">See the workout</a>
         </p>
       )}
@@ -183,8 +183,8 @@ export function AdaptationPage() {
   // One atomic server operation: on failure the proposal stays open and can be retried or declined.
   const approve = (p: AdaptationProposal) =>
     run(async () => {
-      await apiSend('POST', `/adaptations/${p.id}/approve`, {}, applyResponseSchema);
-      return 'Applied. Your next workout was generated with the new setting.';
+      const res = await apiSend('POST', `/adaptations/${p.id}/approve`, {}, applyResponseSchema);
+      return `Applied. ${res.effects.join(' ')}`;
     });
   const decline = (p: AdaptationProposal) => run(async () => void (await apiSend('POST', `/adaptations/${p.id}/decline`, {}, proposalResponseSchema)));
   const refresh = (p: AdaptationProposal) =>

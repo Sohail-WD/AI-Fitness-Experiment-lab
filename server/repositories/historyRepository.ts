@@ -12,7 +12,7 @@ export function listSessions(db: Database, userId: string, source: DataSource): 
        WHERE s.user_id = ? ${filter} ORDER BY s.started_at, s.rowid`,
     )
     .all(userId) as { id: string; title: string }[];
-  return rows.map((r) => ({ session: getSession(db, r.id)!, title: r.title }));
+  return rows.map((r) => ({ session: getSession(db, r.id, userId)!, title: r.title }));
 }
 
 /** Replace all simulated sessions with the given ones (one transaction). Returns how many were removed. */
@@ -26,6 +26,7 @@ export function replaceSimulatedSessions(db: Database, userId: string, sessions:
     );
     for (const s of sessions) {
       if (!s.isSimulated) throw new Error('Only simulated sessions can be seeded');
+      if (s.userId !== userId) throw new Error('Simulated sessions must belong to the requesting user');
       insert.run(s.id, s.workoutId, s.userId, s.status, s.startedAt, s.endedAt, JSON.stringify(s.feedback), JSON.stringify(s.metrics));
     }
     db.exec('COMMIT');

@@ -53,6 +53,7 @@ export const requirements: WorkoutRequirements = {
   location: 'home',
   space: 'medium',
   restrictions: ['avoid_high_impact'],
+  preferredTimes: [],
   trainingParameters: { sets: 4, repsMin: 5, repsMax: 8, restSeconds: 120, holdSeconds: 30 },
   eligibleExerciseIds: ['squat'],
   exclusions: [{ exerciseId: 'jump_squat', reason: 'restriction' }],
@@ -69,6 +70,7 @@ export const workout: Workout = {
     { exerciseId: 'squat', section: 'main', order: 0, sets: 3, target: { type: 'reps', reps: 12 }, restSeconds: 60 },
   ],
   scheduledFor: '2026-09-30',
+  assignment: null,
   estimatedMinutes: 30,
   createdAt: NOW,
 };

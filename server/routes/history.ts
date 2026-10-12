@@ -10,9 +10,10 @@ import { getProfile } from '../repositories/profileRepository.ts';
 import { getLatestWorkout } from '../repositories/workoutRepository.ts';
 import { simulateSessions } from '../services/simulateHistory.ts';
 import { parseWith } from '../validation/parse.ts';
+import { requireVisitor } from '../visitors.ts';
 
-function requireProfile(db: Database) {
-  const profile = getProfile(db);
+function requireProfile(db: Database, userId: string) {
+  const profile = getProfile(db, userId);
   if (!profile) throw new AppError(409, 'conflict', 'Create a profile first');
   return profile;
 }
@@ -23,7 +24,7 @@ export function registerHistoryRoutes(app: FastifyInstance, deps: { db: Database
   /** Session history and deterministic metrics. Real and simulated data are separated unless source=all. */
   app.get('/api/history', async (request): Promise<HistoryResponse> => {
     const { source } = parseWith(z.object({ source: dataSourceSchema.default('real') }), request.query);
-    const { profile } = requireProfile(db);
+    const { profile } = requireProfile(db, requireVisitor(request));
     const sessions = listSessions(db, profile.id, source)
       .filter(({ session }) => session.status !== 'in_progress')
       .map(({ session, title }) => summarizeSession(session, title));
@@ -37,7 +38,7 @@ export function registerHistoryRoutes(app: FastifyInstance, deps: { db: Database
   /** Seed (or re-seed) simulated history from the latest workout. Replaces previous simulated data only. */
   app.post('/api/history/simulated', async (request) => {
     const { weeks, timezoneOffsetMinutes } = parseWith(simulateHistoryInputSchema, request.body ?? {});
-    const { profile } = requireProfile(db);
+    const { profile } = requireProfile(db, requireVisitor(request));
     const workout = getLatestWorkout(db, profile.id);
     if (!workout) throw new AppError(409, 'conflict', 'Generate a workout before creating simulated history');
     const sessions = simulateSessions({
@@ -52,8 +53,8 @@ export function registerHistoryRoutes(app: FastifyInstance, deps: { db: Database
     return { created: sessions.length, replaced };
   });
 
-  app.delete('/api/history/simulated', async () => {
-    const { profile } = requireProfile(db);
+  app.delete('/api/history/simulated', async (request) => {
+    const { profile } = requireProfile(db, requireVisitor(request));
     return { deleted: deleteSimulated(db, profile.id) };
   });
 }

@@ -10,7 +10,8 @@ import { type Workout, type WorkoutSession, workoutSessionSchema } from '../../s
  *
  * Built-in pattern (so the M7 experiment demo has something to find):
  * - planned sessions alternate morning (07:00) and evening (19:00), local time;
- * - morning sessions are attended and completed more often than evening ones;
+ * - morning sessions are completed more often than evening ones (every planned slot is attended, so
+ *   both times of day have enough sessions to compare; the difference is in how much gets finished);
  * - the share of invalid (form-issue) reps falls slowly week over week.
  */
 
@@ -29,8 +30,8 @@ export interface SimulationOptions {
 }
 
 const PROFILE = {
-  morning: { attendance: 0.9, minCompletion: 0.85 },
-  evening: { attendance: 0.6, minCompletion: 0.55 },
+  morning: { attendance: 1, minCompletion: 0.85 },
+  evening: { attendance: 1, minCompletion: 0.55 },
 };
 
 function createRng(seed: number): () => number {

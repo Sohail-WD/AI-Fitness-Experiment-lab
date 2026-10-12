@@ -39,7 +39,7 @@ export function FollowAlongPage() {
       if (s.kind !== 'running') return s;
       const m = buildPerformanceMetrics(state, s.sessionId);
       const reps = m.sets.reduce((n, set) => n + set.validReps, 0);
-      const summary = `${state.outcome === 'completed' ? 'Workout complete' : 'Workout stopped'}: ${state.sets.length} sets, ${reps} valid reps, ${Math.round(m.completionRatio * 100)}% of planned sets, ${Math.round(m.activeDurationSeconds / 60)} min active.`;
+      const summary = `${state.outcome === 'completed' ? 'Workout complete' : 'Workout stopped'}: ${state.sets.length} sets recorded, ${reps} valid reps, ${Math.round(m.completionRatio * 100)}% of planned sets counted (sets with no valid reps are not counted), ${Math.round(m.activeDurationSeconds / 60)} min active.`;
       return { kind: 'feedback', sessionId: s.sessionId, summary };
     });
   }, []);

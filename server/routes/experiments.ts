@@ -4,11 +4,9 @@ import {
   applyLifecycle,
   type ExperimentAction,
   ExperimentTransitionError,
-  type ExperimentSession,
   findTemplate,
   refreshExperiment,
 } from '../../shared/experiments/engine.ts';
-import { summarizeSession } from '../../shared/metrics/history.ts';
 import {
   createExperimentInputSchema,
   type Experiment,
@@ -24,28 +22,17 @@ import {
   saveResult,
   updateExperimentStatus,
 } from '../repositories/experimentRepository.ts';
-import { listSessions } from '../repositories/historyRepository.ts';
 import { getProfile } from '../repositories/profileRepository.ts';
+import { experimentSessions } from '../services/experimentSessions.ts';
 import { parseWith } from '../validation/parse.ts';
+import { requireVisitor } from '../visitors.ts';
 
 type IdParams = { Params: { id: string } };
 
-function requireProfile(db: Database) {
-  const profile = getProfile(db);
+function requireProfile(db: Database, userId: string) {
+  const profile = getProfile(db, userId);
   if (!profile) throw new AppError(409, 'conflict', 'Create a profile first');
   return profile;
-}
-
-function experimentSessions(db: Database, userId: string): ExperimentSession[] {
-  const minutes = new Map(
-    (db.prepare('SELECT id, estimated_minutes FROM workouts WHERE user_id = ?').all(userId) as { id: string; estimated_minutes: number }[]).map(
-      (r) => [r.id, r.estimated_minutes],
-    ),
-  );
-  return listSessions(db, userId, 'all').map(({ session, title }) => ({
-    summary: summarizeSession(session, title),
-    workoutMinutes: minutes.get(session.workoutId) ?? 0,
-  }));
 }
 
 /** Re-evaluate an active experiment (auto-completing it when data suffices) and store the result. */
@@ -60,8 +47,8 @@ function refresh(db: Database, e: Experiment, now: Date): ExperimentWithResult {
 export function registerExperimentRoutes(app: FastifyInstance, deps: { db: Database }): void {
   const { db } = deps;
 
-  app.get('/api/experiments', async () => {
-    const { profile } = requireProfile(db);
+  app.get('/api/experiments', async (request) => {
+    const { profile } = requireProfile(db, requireVisitor(request));
     const now = new Date();
     return { experiments: listExperiments(db, profile.id).map((e) => refresh(db, e, now)) };
   });
@@ -69,7 +56,7 @@ export function registerExperimentRoutes(app: FastifyInstance, deps: { db: Datab
   /** Create a draft from a template. Only one draft/active experiment at a time. */
   app.post('/api/experiments', async (request): Promise<ExperimentWithResult> => {
     const input = parseWith(createExperimentInputSchema, request.body ?? {});
-    const { profile } = requireProfile(db);
+    const { profile } = requireProfile(db, requireVisitor(request));
     const template = findTemplate(input.templateId);
     if (!template) throw new AppError(404, 'not_found', `Unknown experiment template "${input.templateId}"`);
     if (listExperiments(db, profile.id).some((e) => e.status === 'proposed' || e.status === 'active')) {
@@ -92,7 +79,7 @@ export function registerExperimentRoutes(app: FastifyInstance, deps: { db: Datab
 
   const action = (name: Exclude<ExperimentAction, 'complete'>) =>
     app.post<IdParams>(`/api/experiments/:id/${name}`, async (request): Promise<ExperimentWithResult> => {
-      const e = getExperiment(db, request.params.id);
+      const e = getExperiment(db, request.params.id, requireVisitor(request));
       if (!e) throw new AppError(404, 'not_found', `Experiment "${request.params.id}" not found`);
       const now = new Date();
       let next: Experiment;

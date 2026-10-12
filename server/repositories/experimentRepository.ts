@@ -51,11 +51,12 @@ export function insertExperiment(db: Database, e: Experiment): void {
 }
 
 export function updateExperimentStatus(db: Database, e: Experiment): void {
-  db.prepare('UPDATE experiments SET status = ?, started_at = ?, ended_at = ? WHERE id = ?').run(e.status, e.startedAt, e.endedAt, e.id);
+  db.prepare('UPDATE experiments SET status = ?, started_at = ?, ended_at = ? WHERE id = ? AND user_id = ?').run(e.status, e.startedAt, e.endedAt, e.id, e.userId);
 }
 
-export function getExperiment(db: Database, id: string): Experiment | null {
-  const row = db.prepare('SELECT * FROM experiments WHERE id = ?').get(id) as Row | undefined;
+/** An experiment of this user, or null. */
+export function getExperiment(db: Database, id: string, userId: string): Experiment | null {
+  const row = db.prepare('SELECT * FROM experiments WHERE id = ? AND user_id = ?').get(id, userId) as Row | undefined;
   return row ? toExperiment(row) : null;
 }
 

@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../server/app';
 import { type Database, openDatabase } from '../../server/db/database';
 import { getResult, insertExperiment, saveResult } from '../../server/repositories/experimentRepository';
-import { getProfile } from '../../server/repositories/profileRepository';
 import { findTemplate } from '../../shared/experiments/engine';
 import { findExercise } from '../../shared/exercises/library';
 import { adaptationListSchema, applyResponseSchema, generateAdaptationsResponseSchema, proposalResponseSchema } from '../../shared/schemas/adaptation';
@@ -12,7 +11,9 @@ import type { Experiment } from '../../shared/schemas/experiment';
 import { experimentWithResultSchema } from '../../shared/schemas/experiment';
 import { type ProfileInput, profileResponseSchema } from '../../shared/schemas/profile';
 import { workoutSchema } from '../../shared/schemas/workout';
-import { testConfig } from './helpers';
+import { onlyVisitorId as visitorOf, testConfig, withCookieJar } from './helpers';
+
+const onlyVisitorId = () => visitorOf(db);
 
 let db: Database;
 let app: FastifyInstance;
@@ -36,7 +37,7 @@ async function setup(constraints?: { restrictionTags: string[]; notes: string; s
 }
 beforeEach(() => {
   db = openDatabase(':memory:');
-  app = buildApp({ config: testConfig, db });
+  app = withCookieJar(buildApp({ config: testConfig, db }));
 });
 afterEach(async () => {
   await app.close();
@@ -52,7 +53,7 @@ const generate = async () => generateAdaptationsResponseSchema.parse((await post
 
 /** Insert a finished experiment with a stored result directly (real data unless isSimulated). */
 function seedExperiment(templateId: string, o: { metrics: [number | null, number | null]; isSimulated?: boolean; sufficient?: boolean; status?: Experiment['status'] }) {
-  const userId = getProfile(db)!.profile.id;
+  const userId = onlyVisitorId();
   const e: Experiment = {
     id: randomUUID(),
     userId,
@@ -97,7 +98,7 @@ describe('proposal generation and references', () => {
       changes: [{ parameter: 'workout_timing', from: [], to: ['morning'] }],
     });
     expect(p.resultComputedAt).toBe(getResult(db, created.experiment.id)!.computedAt);
-    expect(p.rationale).toMatch(/During this experiment, you completed \d+% of your planned morning workouts/);
+    expect(p.rationale).toMatch(/During this experiment, you completed \d+% of the morning workouts you started/);
     expect((await currentProfile()).profile.schedule.preferredTimes).toEqual([]); // nothing changed yet
 
     const [item] = await list();

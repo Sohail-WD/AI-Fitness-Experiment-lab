@@ -9,7 +9,7 @@ import { type Database, openDatabase } from '../../server/db/database';
 import { createRateLimiter } from '../../server/http';
 import { resolveStaticFile } from '../../server/static';
 import { apiErrorSchema } from '../../shared/schemas/api';
-import { testConfig } from './helpers';
+import { testConfig, withCookieJar } from './helpers';
 
 let root: string;
 beforeAll(() => {
@@ -26,7 +26,7 @@ let db: Database | undefined;
 let app: FastifyInstance;
 const build = (overrides: Partial<typeof testConfig> = {}) => {
   db = openDatabase(':memory:');
-  app = buildApp({ config: { ...testConfig, ...overrides }, db });
+  app = withCookieJar(buildApp({ config: { ...testConfig, ...overrides }, db }));
   return app;
 };
 afterEach(async () => {
@@ -38,7 +38,7 @@ afterEach(async () => {
 
 describe('production config', () => {
   it('serves the frontend in production and requires a database URL there', () => {
-    const c = loadConfig({ NODE_ENV: 'production', DATABASE_URL: 'file:/srv/app.db', CORS_ORIGIN: 'https://fit.example.com' });
+    const c = loadConfig({ NODE_ENV: 'production', DATABASE_URL: 'file:/srv/app.db', CORS_ORIGIN: 'https://fit.example.com', TRUST_PROXY: '1' });
     expect(c.staticDir).toMatch(/dist$/);
     expect(c.corsOrigin).toBe('https://fit.example.com');
     expect(loadConfig({}).staticDir).toBeNull();
@@ -132,6 +132,20 @@ describe('CORS and security headers', () => {
   });
 });
 
+const PROFILE = {
+  profile: {
+    name: 'Asha',
+    fitnessLevel: 'beginner',
+    goals: ['general_fitness'],
+    trainingContext: 'recreationally_active',
+    equipment: [],
+    environment: { location: 'home' },
+    availableMinutes: 15,
+    schedule: { preferredDays: [], preferredTimes: [], workoutsPerWeek: 3 },
+  },
+  constraints: { restrictionTags: [], notes: '', source: 'self_reported' },
+};
+
 describe('AI endpoint rate limit', () => {
   it('limits requests per client per window', () => {
     let t = 0;
@@ -146,6 +160,7 @@ describe('AI endpoint rate limit', () => {
 
   it('answers 429 with Retry-After once the limit is reached', async () => {
     build({ aiRateLimitPerMinute: 2 });
+    await app.inject({ method: 'PUT', url: '/api/profile', payload: PROFILE }); // start a demo session
     const url = '/api/ai/experiments/00000000-0000-4000-8000-000000000000/analysis';
     expect((await app.inject({ method: 'POST', url, payload: {} })).statusCode).toBe(404);
     expect((await app.inject({ method: 'POST', url, payload: {} })).statusCode).toBe(404);

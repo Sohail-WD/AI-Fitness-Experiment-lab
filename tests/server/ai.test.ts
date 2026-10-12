@@ -11,7 +11,7 @@ import { describeResult, findTemplate, OBSERVATION_CAVEAT } from '../../shared/e
 import { analysisReportSchema } from '../../shared/schemas/ai';
 import { type Experiment, type ExperimentResult, experimentWithResultSchema } from '../../shared/schemas/experiment';
 import { USER_ID } from '../fixtures/contracts';
-import { testConfig } from './helpers';
+import { testConfig, withCookieJar } from './helpers';
 
 /* ---------- fixtures ---------- */
 
@@ -265,7 +265,7 @@ describe('POST /api/ai/experiments/:id/analysis', () => {
   let app: FastifyInstance;
   beforeEach(async () => {
     db = openDatabase(':memory:');
-    app = buildApp({ config: testConfig, db }); // no key → deterministic summaries
+    app = withCookieJar(buildApp({ config: testConfig, db })); // no key → deterministic summaries
     await app.inject({
       method: 'PUT',
       url: '/api/profile',
@@ -305,13 +305,13 @@ describe('POST /api/ai/experiments/:id/analysis', () => {
     const report = analysisReportSchema.parse(res.json());
     expect(report).toMatchObject({ source: 'fallback', fallbackReason: 'no_api_key', isSimulated: true, experimentId: id });
     expect(report.notice).toContain('SIMULATED');
-    expect(report.observations[0].text).toMatch(/^During this experiment, you completed \d+% of your planned morning workouts/);
+    expect(report.observations[0].text).toMatch(/^During this experiment, you completed \d+% of the morning workouts you started/);
   });
 
   it('uses the injected analysis service and passes it the stored deterministic result', async () => {
     const id = await simulatedExperiment();
     const llm = fakeLlm('{"broken":');
-    const withAi = buildApp({ config: testConfig, db, ai: createAnalysisService({ llm: llm.client }) });
+    const withAi = withCookieJar(buildApp({ config: testConfig, db, ai: createAnalysisService({ llm: llm.client }) }), { sameBrowserAs: app });
     const res = await withAi.inject({ method: 'POST', url: `/api/ai/experiments/${id}/analysis`, payload: {} });
     expect(analysisReportSchema.parse(res.json())).toMatchObject({ source: 'fallback', fallbackReason: 'invalid_response' });
     expect(llm.calls).toHaveLength(1);

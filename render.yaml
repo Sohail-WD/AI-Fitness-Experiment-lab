@@ -1,0 +1,49 @@
+# Render Blueprint for the API backend (the frontend is deployed on Vercel; see vercel.json and README "Deployment").
+# FREE TIER: no persistent disk. The SQLite file lives in /tmp and is LOST whenever the service restarts,
+# redeploys, or spins down after ~15 minutes without traffic. Demo data is temporary.
+services:
+  - type: web
+    name: ai-fitness-experiment-lab-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      # Absolute path required in production. /tmp is ephemeral on the free plan (fresh database on every start).
+      - key: DATABASE_URL
+        value: file:/tmp/fitness-lab.db
+      # API only: Vercel serves the frontend.
+      - key: SERVE_FRONTEND
+        value: "false"
+      # Expected chain: browser -> Vercel rewrite -> Render proxy -> app. VERIFY after the first deploy
+      # (README "Verify the client IP"); change if the logged resolvedIp is not your own IP.
+      - key: TRUST_PROXY
+        value: "2"
+      - key: DEBUG_PROXY_HEADERS
+        value: "false"
+      # Secret: set the value in the Render dashboard. Never commit it.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: AI_RATE_LIMIT_PER_MINUTE
+        value: "10"
+      - key: AI_DAILY_LIMIT_PER_VISITOR
+        value: "20"
+      - key: AI_DAILY_LIMIT_TOTAL
+        value: "500"
+      - key: NEW_VISITORS_PER_IP_PER_HOUR
+        value: "10"
+      - key: NEW_VISITORS_PER_HOUR
+        value: "200"
+      - key: WRITE_RATE_LIMIT_PER_MINUTE
+        value: "120"
+      - key: VISITOR_RETENTION_DAYS
+        value: "30"

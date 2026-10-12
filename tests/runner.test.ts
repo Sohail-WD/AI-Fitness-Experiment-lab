@@ -138,12 +138,30 @@ describe('stop and session recording', () => {
     for (const e of s.log) expect(sessionEventInputSchema.safeParse(e).success, JSON.stringify(e)).toBe(true);
   });
 
-  it('builds contract-valid performance metrics from completed sets', () => {
-    const s = run([complete, { type: 'stop', at: AT }], atSquat());
+  it('builds contract-valid performance metrics; sets with real work count toward completion', () => {
+    // Warm-up finished (timed set) + one squat set with 5 reps entered: 2 genuine sets of 5 planned.
+    const reps = Array.from({ length: 5 }, () => ({ type: 'add_rep', delta: 1 }) as RunnerAction);
+    const s = run([...reps, complete, { type: 'stop', at: AT }], atSquat());
     const m = buildPerformanceMetrics(s, SESSION);
     expect(performanceMetricsSchema.safeParse(m).success).toBe(true);
     expect(m.completionRatio).toBeCloseTo(2 / 5);
     expect(m.activeDurationSeconds).toBe(30);
+  });
+
+  it('a rep-based set completed with zero valid reps is recorded but NOT counted as completed (M11)', () => {
+    const s = run([complete, { type: 'stop', at: AT }], atSquat()); // "Complete set" with 0 reps
+    expect(s.sets).toHaveLength(2); // recorded...
+    const m = buildPerformanceMetrics(s, SESSION);
+    expect(m.sets).toHaveLength(2);
+    expect(m.completionRatio).toBeCloseTo(1 / 5); // ...but only the finished timed warm-up counts
+  });
+
+  it('clicking through every set with no reps never reaches the completion threshold', () => {
+    const everything: RunnerAction[] = [complete, tick(60_000), complete, tick(60_000), complete, tick(45_000), complete];
+    const s = run(everything, atSquat());
+    expect(s.phase).toBe('done');
+    const m = buildPerformanceMetrics(s, SESSION);
+    expect(m.completionRatio).toBeLessThan(0.8);
   });
 });
 

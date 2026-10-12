@@ -19,7 +19,7 @@ export interface Fact {
 }
 
 const METRIC_NAME: Record<ExperimentMetric, string> = {
-  adherence: 'adherence (planned workouts completed)',
+  adherence: 'adherence (assigned workouts completed)',
   completion_ratio: 'average share of sets completed',
   valid_rep_ratio: 'valid-rep rate',
   effort: 'average effort rating',
@@ -50,7 +50,7 @@ export function buildFacts(experiment: Experiment, result: ExperimentResult): Fa
     }
     facts.push({ ref: `${c.id}.observations`, label: `${c.label}: observations`, kind: 'count', value: p.observations, display: String(p.observations) });
     if (p.planned !== undefined) {
-      facts.push({ ref: `${c.id}.planned`, label: `${c.label}: planned workouts`, kind: 'count', value: p.planned, display: String(p.planned) });
+      facts.push({ ref: `${c.id}.planned`, label: `${c.label}: assigned workouts you started`, kind: 'count', value: p.planned, display: String(p.planned) });
     }
     if (p.completed !== undefined) {
       facts.push({ ref: `${c.id}.completed`, label: `${c.label}: sessions counted as completed`, kind: 'count', value: p.completed, display: String(p.completed) });

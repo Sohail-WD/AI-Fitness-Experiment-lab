@@ -5,6 +5,7 @@ import { adaptationProposal, profile, USER_ID } from '../fixtures/contracts';
 
 const EXPECTED_TABLES = [
   'adaptation_proposals',
+  'ai_usage',
   'analysis_reports',
   'exercises',
   'experiment_results',
@@ -12,6 +13,7 @@ const EXPECTED_TABLES = [
   'session_events',
   'user_constraints',
   'user_profiles',
+  'visitors',
   'workout_sessions',
   'workouts',
 ];
@@ -48,7 +50,7 @@ describe('database initialization', () => {
       }[]
     ).map((r) => r.name);
     expect(tables).toEqual([...EXPECTED_TABLES, 'schema_migrations'].sort());
-    expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
   });
 
   it('is idempotent: re-running migrations applies nothing', () => {

@@ -69,12 +69,13 @@ export function insertProposal(db: Database, p: AdaptationProposal): void {
 
 /** Persist a lifecycle transition (status, timestamps, applied workout). */
 export function saveTransition(db: Database, p: AdaptationProposal): void {
-  db.prepare('UPDATE adaptation_proposals SET status = ?, decided_at = ?, applied_at = ?, applied_workout_id = ? WHERE id = ?').run(
+  db.prepare('UPDATE adaptation_proposals SET status = ?, decided_at = ?, applied_at = ?, applied_workout_id = ? WHERE id = ? AND user_id = ?').run(
     p.status,
     p.decidedAt,
     p.appliedAt,
     p.appliedWorkoutId,
     p.id,
+    p.userId,
   );
 }
 
@@ -86,7 +87,7 @@ export function saveTransition(db: Database, p: AdaptationProposal): void {
 export function replaceProposalContent(db: Database, p: AdaptationProposal): void {
   db.prepare(
     `UPDATE adaptation_proposals SET title = ?, significance = ?, status = ?, changes = ?, rationale = ?, is_simulated = ?,
-       result_computed_at = ?, created_at = ?, decided_at = ?, applied_at = ?, applied_workout_id = ? WHERE id = ?`,
+       result_computed_at = ?, created_at = ?, decided_at = ?, applied_at = ?, applied_workout_id = ? WHERE id = ? AND user_id = ?`,
   ).run(
     p.title,
     p.significance,
@@ -100,11 +101,13 @@ export function replaceProposalContent(db: Database, p: AdaptationProposal): voi
     p.appliedAt,
     p.appliedWorkoutId,
     p.id,
+    p.userId,
   );
 }
 
-export function getProposal(db: Database, id: string): AdaptationProposal | null {
-  const row = db.prepare('SELECT * FROM adaptation_proposals WHERE id = ?').get(id) as unknown as Row | undefined;
+/** A proposal of this user, or null. */
+export function getProposal(db: Database, id: string, userId: string): AdaptationProposal | null {
+  const row = db.prepare('SELECT * FROM adaptation_proposals WHERE id = ? AND user_id = ?').get(id, userId) as unknown as Row | undefined;
   return row ? toProposal(row) : null;
 }
 

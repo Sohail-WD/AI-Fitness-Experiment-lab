@@ -3,13 +3,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../server/app';
 import { type Database, openDatabase } from '../../server/db/database';
 import { experimentListSchema, experimentWithResultSchema } from '../../shared/schemas/experiment';
-import { testConfig } from './helpers';
+import { testConfig, withCookieJar } from './helpers';
 
 let db: Database;
 let app: FastifyInstance;
 beforeEach(async () => {
   db = openDatabase(':memory:');
-  app = buildApp({ config: testConfig, db });
+  app = withCookieJar(buildApp({ config: testConfig, db }));
   await app.inject({
     method: 'PUT',
     url: '/api/profile',

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   AdaptationApplyError,
   AdaptationTransitionError,
+  appliedEffects,
   applyChangesToProfile,
   canAutoApply,
   isOpen,
@@ -28,7 +29,7 @@ import {
 } from '../repositories/adaptationRepository.ts';
 import { getExperiment, getResult, listExperiments } from '../repositories/experimentRepository.ts';
 import { getProfile, writeProfile } from '../repositories/profileRepository.ts';
-import { insertWorkout } from '../repositories/workoutRepository.ts';
+import { getLatestWorkout, insertWorkout } from '../repositories/workoutRepository.ts';
 
 /**
  * Closes the adaptive loop: experiment result → proposal → user approval →
@@ -54,8 +55,8 @@ const SKIP_EXPLANATION: Record<SkipReason, string> = {
   violates_constraints: 'it would conflict with your restrictions',
 };
 
-function requireProfile(db: Database): ProfileResponse {
-  const profile = getProfile(db);
+function requireProfile(db: Database, userId: string): ProfileResponse {
+  const profile = getProfile(db, userId);
   if (!profile) throw new AppError(409, 'conflict', 'Create a profile first');
   return profile;
 }
@@ -65,8 +66,8 @@ function profileToInput({ profile, constraints }: ProfileResponse): ProfileInput
   return { profile: rest, constraints: { restrictionTags: constraints.restrictionTags, notes: constraints.notes, source: constraints.source } };
 }
 
-function requireProposal(db: Database, id: string): AdaptationProposal {
-  const p = getProposal(db, id);
+function requireProposal(db: Database, userId: string, id: string): AdaptationProposal {
+  const p = getProposal(db, id, userId);
   if (!p) throw new AppError(404, 'not_found', `Adaptation proposal "${id}" not found`);
   return p;
 }
@@ -80,8 +81,8 @@ function guarded<T>(fn: () => T): T {
   }
 }
 
-export function listWithStaleness(db: Database) {
-  const { profile } = requireProfile(db);
+export function listWithStaleness(db: Database, userId: string) {
+  const { profile } = requireProfile(db, userId);
   return listProposals(db, profile.id).map((proposal) => ({
     proposal,
     // Only open proposals can be stale; finished ones are history.
@@ -96,7 +97,7 @@ export function listWithStaleness(db: Database) {
  * so failures before the write change nothing; failures during the write roll back.
  */
 function applyToPlan(db: Database, proposal: AdaptationProposal, mode: 'approve' | 'auto_apply', now: Date) {
-  const current = requireProfile(db);
+  const current = requireProfile(db, proposal.userId);
   if (isStale(current.profile, proposal.changes)) throw new AppError(409, 'conflict', STALE_MESSAGE);
 
   let next: ProfileInput;
@@ -113,11 +114,12 @@ function applyToPlan(db: Database, proposal: AdaptationProposal, mode: 'approve'
   }
 
   return withTransaction(db, () => {
-    writeProfile(db, next);
+    const previous = getLatestWorkout(db, current.profile.id);
+    writeProfile(db, current.profile.id, next);
     const workout: Workout = insertWorkout(db, current.profile.id, plan);
     const applied = guarded(() => transitionProposal(proposal, mode, now, workout.id));
     saveTransition(db, applied);
-    return { proposal: applied, workout };
+    return { proposal: applied, workout, effects: appliedEffects(proposal.changes, workout, previous) };
   });
 }
 
@@ -126,14 +128,14 @@ function applyToPlan(db: Database, proposal: AdaptationProposal, mode: 'approve'
  * On any failure the proposal is left exactly as it was (still open) and can be
  * retried, updated (if stale) or declined.
  */
-export function approveProposal(db: Database, id: string, now = new Date()) {
-  const proposal = requireProposal(db, id);
+export function approveProposal(db: Database, userId: string, id: string, now = new Date()) {
+  const proposal = requireProposal(db, userId, id);
   guarded(() => transitionProposal(proposal, 'approve', now)); // valid from this state?
   return applyToPlan(db, proposal, 'approve', now);
 }
 
-export function declineProposal(db: Database, id: string, now = new Date()): AdaptationProposal {
-  const next = guarded(() => transitionProposal(requireProposal(db, id), 'decline', now));
+export function declineProposal(db: Database, userId: string, id: string, now = new Date()): AdaptationProposal {
+  const next = guarded(() => transitionProposal(requireProposal(db, userId, id), 'decline', now));
   saveTransition(db, next);
   return next;
 }
@@ -163,13 +165,13 @@ function fromDraft(d: ProposalDraft, base: Pick<AdaptationProposal, 'id' | 'user
  * experiment). If the rule no longer proposes anything, the proposal is left
  * open with an explanation, so the user can decline it.
  */
-export function refreshProposal(db: Database, id: string, now = new Date()): AdaptationProposal {
-  const proposal = requireProposal(db, id);
+export function refreshProposal(db: Database, userId: string, id: string, now = new Date()): AdaptationProposal {
+  const proposal = requireProposal(db, userId, id);
   if (!isOpen(proposal)) throw new AppError(409, 'conflict', 'Only open proposals can be updated');
-  const current = requireProfile(db);
+  const current = requireProfile(db, userId);
   if (!isStale(current.profile, proposal.changes)) throw new AppError(409, 'conflict', 'This proposal is already up to date');
 
-  const experiment = proposal.experimentId ? getExperiment(db, proposal.experimentId) : null;
+  const experiment = proposal.experimentId ? getExperiment(db, proposal.experimentId, userId) : null;
   if (!experiment) throw new AppError(409, 'conflict', 'The experiment behind this proposal no longer exists. Decline it.');
   const outcome = proposeFromExperiment(experiment, getResult(db, experiment.id), {
     profile: current.profile,
@@ -189,8 +191,8 @@ export function refreshProposal(db: Database, id: string, now = new Date()): Ada
  * experiment). Minor, safe changes based on real data are then applied
  * automatically; if that fails it is rolled back and the proposal stays pending.
  */
-export function generateProposals(db: Database, now = new Date(), log: (message: string) => void = () => {}) {
-  const { profile } = requireProfile(db);
+export function generateProposals(db: Database, userId: string, now = new Date(), log: (message: string) => void = () => {}) {
+  const { profile } = requireProfile(db, userId);
   const created: AdaptationProposal[] = [];
   const skipped: { experimentId: string; reason: SkipReason }[] = [];
 
@@ -201,7 +203,7 @@ export function generateProposals(db: Database, now = new Date(), log: (message:
       continue;
     }
     // Re-read the profile: an auto-applied proposal may already have changed it.
-    const latest = requireProfile(db);
+    const latest = requireProfile(db, userId);
     const outcome = proposeFromExperiment(experiment, getResult(db, experiment.id), {
       profile: latest.profile,
       constraints: latest.constraints,

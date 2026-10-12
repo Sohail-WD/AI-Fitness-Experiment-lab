@@ -4,7 +4,7 @@ import { type Database, openDatabase } from '../../server/db/database';
 import { findExercise } from '../../shared/exercises/library';
 import { workoutSchema, workoutSessionSchema } from '../../shared/schemas/workout';
 import { FrameProcessor } from '../../src/cv/frameProcessor';
-import { testConfig } from './helpers';
+import { testConfig, withCookieJar } from './helpers';
 
 /** Movement patterns whose exercises gained CV tracking in M4. */
 const M4_CV_PATTERNS: string[] = ['lunge', 'curl', 'press'];
@@ -13,7 +13,7 @@ let db: Database;
 let app: ReturnType<typeof buildApp>;
 beforeEach(() => {
   db = openDatabase(':memory:');
-  app = buildApp({ config: testConfig, db });
+  app = withCookieJar(buildApp({ config: testConfig, db }));
 });
 afterEach(async () => {
   await app.close();

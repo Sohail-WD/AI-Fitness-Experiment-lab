@@ -9,7 +9,7 @@ import { ApiError, apiGet, apiSend } from '../lib/api';
 import { Loading, PageError } from '../components/PageStatus';
 
 const METRIC_LABEL = {
-  adherence: 'Adherence (planned workouts completed)',
+  adherence: 'Adherence (assigned workouts completed)',
   completion_ratio: 'Average share of sets completed',
   valid_rep_ratio: 'Valid-rep rate',
   effort: 'Average effort rating',
@@ -69,9 +69,16 @@ function ExperimentCard({ item, onAction, busy }: { item: ExperimentWithResult; 
           <p className="hint">
             {e.isSimulated
               ? 'Uses SIMULATED history (generate it on the History tab). Results appear as soon as you start.'
-              : 'After you start, your real workouts are assigned to a condition by the rule above.'}
+              : 'After you start, generate your next workouts on the Workout tab: each one is assigned to A or B in turn. Workouts generated before you start are not counted.'}
           </p>
         )
+      )}
+
+      {e.status === 'active' && !e.isSimulated && (
+        <p className="hint">
+          Generate your next workout on the Workout tab: it is assigned to the condition with fewer sessions so far. Only finished workouts
+          with at least one real set that follow their assignment count as observations.
+        </p>
       )}
 
       <div className="controls">

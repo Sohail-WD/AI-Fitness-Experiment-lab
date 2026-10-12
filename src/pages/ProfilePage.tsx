@@ -41,11 +41,28 @@ export function ProfilePage() {
     }
   };
 
+  // "Delete my data": removes this browser's demo session and everything in it on the server.
+  const deleteMyData = async () => {
+    if (!window.confirm('Delete your profile, workouts, history, experiments and adaptations from the demo server? This cannot be undone.')) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/visitor', { method: 'DELETE' });
+      if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+      setState({ kind: 'ready', saved: null });
+      setMessage({ kind: 'ok', text: 'Your data was deleted from the demo server.' });
+    } catch (err) {
+      setMessage({ kind: 'error', text: err instanceof Error ? `Could not delete your data. ${err.message}` : 'Could not delete your data.' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <section aria-labelledby="profile-title">
       <div className="page-header">
         <h2 id="profile-title">Profile</h2>
-        <p className="subtitle">Used to personalize your workouts. Stored on this app's server only.</p>
+        <p className="subtitle">Used to personalize your workouts. Stored on this app's server only, linked to this browser.</p>
       </div>
 
       {state.kind === 'loading' && <p className="subtitle">Loading…</p>}
@@ -67,6 +84,20 @@ export function ProfilePage() {
           {message.text}
         </p>
       )}
+
+      <div className="panel">
+        <h3>Your data in this demo</h3>
+        <p className="hint">
+          This is a public demo without accounts. Your data is linked to this browser by a cookie, stored on the demo server,
+          and deleted after 30 days of inactivity. The demo server may also be reset when it restarts, so data can be lost
+          at any time. Camera video never leaves your browser.
+        </p>
+        {state.kind === 'ready' && state.saved && (
+          <button type="button" className="secondary" onClick={deleteMyData} disabled={saving}>
+            Delete my data
+          </button>
+        )}
+      </div>
     </section>
   );
 }

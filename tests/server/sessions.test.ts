@@ -4,7 +4,7 @@ import { buildApp } from '../../server/app';
 import { type Database, openDatabase } from '../../server/db/database';
 import { countEvents } from '../../server/repositories/sessionRepository';
 import { workoutSchema, workoutSessionSchema } from '../../shared/schemas/workout';
-import { testConfig } from './helpers';
+import { testConfig, withCookieJar } from './helpers';
 
 let db: Database;
 let app: FastifyInstance;
@@ -12,7 +12,7 @@ let workoutId: string;
 
 beforeEach(async () => {
   db = openDatabase(':memory:');
-  app = buildApp({ config: testConfig, db });
+  app = withCookieJar(buildApp({ config: testConfig, db }));
   await app.inject({
     method: 'PUT',
     url: '/api/profile',

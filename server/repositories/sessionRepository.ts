@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { genuineCompletionRatio } from '../../shared/metrics/completion.ts';
 import type { PerformanceMetrics } from '../../shared/schemas/metrics.ts';
 import {
   type PostWorkoutFeedback,
   type SessionEventInput,
+  type WorkoutItem,
   type WorkoutSession,
   workoutSessionSchema,
 } from '../../shared/schemas/workout.ts';
@@ -21,8 +23,9 @@ interface SessionRow {
   metrics: string | null;
 }
 
-export function getSession(db: Database, id: string): WorkoutSession | null {
-  const row = db.prepare('SELECT * FROM workout_sessions WHERE id = ?').get(id) as SessionRow | undefined;
+/** A session of this user, or null (another user's session is indistinguishable from a missing one). */
+export function getSession(db: Database, id: string, userId: string): WorkoutSession | null {
+  const row = db.prepare('SELECT * FROM workout_sessions WHERE id = ? AND user_id = ?').get(id, userId) as SessionRow | undefined;
   if (!row) return null;
   const parsed = workoutSessionSchema.safeParse({
     id: row.id,
@@ -39,8 +42,8 @@ export function getSession(db: Database, id: string): WorkoutSession | null {
   return parsed.data;
 }
 
-function requireSession(db: Database, id: string, mustBeInProgress: boolean): WorkoutSession {
-  const session = getSession(db, id);
+function requireSession(db: Database, userId: string, id: string, mustBeInProgress: boolean): WorkoutSession {
+  const session = getSession(db, id, userId);
   if (!session) throw new AppError(404, 'not_found', `Session "${id}" not found`);
   if (mustBeInProgress && session.status !== 'in_progress') {
     throw new AppError(409, 'conflict', 'Session has already ended');
@@ -48,18 +51,18 @@ function requireSession(db: Database, id: string, mustBeInProgress: boolean): Wo
   return session;
 }
 
-export function createSession(db: Database, workoutId: string): WorkoutSession {
-  const workout = db.prepare('SELECT user_id FROM workouts WHERE id = ?').get(workoutId) as { user_id: string } | undefined;
+export function createSession(db: Database, userId: string, workoutId: string): WorkoutSession {
+  const workout = db.prepare('SELECT user_id FROM workouts WHERE id = ? AND user_id = ?').get(workoutId, userId) as { user_id: string } | undefined;
   if (!workout) throw new AppError(404, 'not_found', `Workout "${workoutId}" not found`);
   const id = randomUUID();
   db.prepare(
     `INSERT INTO workout_sessions (id, workout_id, user_id, status, started_at, is_simulated) VALUES (?, ?, ?, 'in_progress', ?, 0)`,
-  ).run(id, workoutId, workout.user_id, new Date().toISOString());
-  return getSession(db, id)!;
+  ).run(id, workoutId, userId, new Date().toISOString());
+  return getSession(db, id, userId)!;
 }
 
-export function appendEvents(db: Database, sessionId: string, events: SessionEventInput[]): number {
-  requireSession(db, sessionId, true);
+export function appendEvents(db: Database, userId: string, sessionId: string, events: SessionEventInput[]): number {
+  requireSession(db, userId, sessionId, true);
   const insert = db.prepare(
     'INSERT INTO session_events (session_id, type, occurred_at, exercise_id, set_index, data) VALUES (?, ?, ?, ?, ?, ?)',
   );
@@ -76,25 +79,31 @@ export function appendEvents(db: Database, sessionId: string, events: SessionEve
 
 export function completeSession(
   db: Database,
+  userId: string,
   sessionId: string,
   status: 'completed' | 'abandoned',
   metrics: PerformanceMetrics,
 ): WorkoutSession {
-  requireSession(db, sessionId, true);
+  const session = requireSession(db, userId, sessionId, true);
   if (metrics.sessionId !== sessionId) throw new AppError(400, 'validation_error', 'metrics.sessionId does not match');
-  db.prepare('UPDATE workout_sessions SET status = ?, ended_at = ?, metrics = ? WHERE id = ?').run(
+  // The server owns completion: recomputed from the recorded sets and the workout plan (sets with no valid reps do not count).
+  const row = db.prepare('SELECT items FROM workouts WHERE id = ?').get(session.workoutId) as { items: string } | undefined;
+  const items = row ? (JSON.parse(row.items) as { exerciseId: string; sets: number; target: WorkoutItem['target'] }[]) : [];
+  const verified: PerformanceMetrics = { ...metrics, completionRatio: genuineCompletionRatio(metrics.sets, items) };
+  db.prepare('UPDATE workout_sessions SET status = ?, ended_at = ?, metrics = ? WHERE id = ? AND user_id = ?').run(
     status,
     new Date().toISOString(),
-    JSON.stringify(metrics),
+    JSON.stringify(verified),
     sessionId,
+    userId,
   );
-  return getSession(db, sessionId)!;
+  return getSession(db, sessionId, userId)!;
 }
 
-export function saveFeedback(db: Database, sessionId: string, feedback: PostWorkoutFeedback): WorkoutSession {
-  requireSession(db, sessionId, false);
-  db.prepare('UPDATE workout_sessions SET feedback = ? WHERE id = ?').run(JSON.stringify(feedback), sessionId);
-  return getSession(db, sessionId)!;
+export function saveFeedback(db: Database, userId: string, sessionId: string, feedback: PostWorkoutFeedback): WorkoutSession {
+  requireSession(db, userId, sessionId, false);
+  db.prepare('UPDATE workout_sessions SET feedback = ? WHERE id = ? AND user_id = ?').run(JSON.stringify(feedback), sessionId, userId);
+  return getSession(db, sessionId, userId)!;
 }
 
 export function countEvents(db: Database, sessionId: string): number {

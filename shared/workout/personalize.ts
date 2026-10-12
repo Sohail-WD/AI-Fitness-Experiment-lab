@@ -1,4 +1,4 @@
-import type { FitnessLevel, Goal, Location, Space, TrainingContext } from '../schemas/common.ts';
+import type { FitnessLevel, Goal, Location, RestrictionTag, Space, TrainingContext } from '../schemas/common.ts';
 import type { ExerciseDefinition } from '../schemas/exercise.ts';
 import type { UserConstraints, UserProfile } from '../schemas/profile.ts';
 import type { TrainingParameters, WorkoutRequirements } from '../schemas/workout.ts';
@@ -67,6 +67,19 @@ export function hasRequiredEquipment(exercise: ExerciseDefinition, available: re
   return exercise.requiredEquipment.every((e) => available.includes(e));
 }
 
+/**
+ * Exercises in an existing workout that conflict with the user's CURRENT
+ * restrictions (for example restrictions added after the workout was generated).
+ */
+export function restrictionConflicts(
+  items: readonly { exerciseId: string }[],
+  restrictionTags: readonly RestrictionTag[],
+  library: readonly ExerciseDefinition[],
+): ExerciseDefinition[] {
+  const ids = new Set(items.map((i) => i.exerciseId));
+  return library.filter((e) => ids.has(e.id) && e.restrictionTags.some((t) => restrictionTags.includes(t)));
+}
+
 export function personalize(
   profile: UserProfile,
   constraints: UserConstraints,
@@ -105,6 +118,7 @@ export function personalize(
     location: profile.environment.location,
     space,
     restrictions,
+    preferredTimes: profile.schedule.preferredTimes,
     trainingParameters: trainingParametersFor(
       goal,
       profile.fitnessLevel,

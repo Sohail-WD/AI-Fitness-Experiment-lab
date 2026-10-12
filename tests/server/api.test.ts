@@ -6,14 +6,14 @@ import { type Database, openDatabase } from '../../server/db/database';
 import { parseWith } from '../../server/validation/parse';
 import { apiErrorSchema, healthResponseSchema } from '../../shared/schemas/api';
 import { exerciseDefinitionSchema } from '../../shared/schemas/exercise';
-import { testConfig } from './helpers';
+import { testConfig, withCookieJar } from './helpers';
 
 let db: Database;
 let app: FastifyInstance;
 
 beforeEach(() => {
   db = openDatabase(':memory:');
-  app = buildApp({ config: testConfig, db });
+  app = withCookieJar(buildApp({ config: testConfig, db }));
 });
 
 afterEach(async () => {
@@ -31,7 +31,7 @@ describe('GET /api/health', () => {
   });
 
   it('reports the AI as configured when a key is set, without exposing it', async () => {
-    const keyed = buildApp({ config: { ...testConfig, groqApiKey: 'gsk-test-not-real' }, db });
+    const keyed = withCookieJar(buildApp({ config: { ...testConfig, groqApiKey: 'gsk-test-not-real' }, db }));
     const res = await keyed.inject({ method: 'GET', url: '/api/health' });
     expect(res.json().services.ai).toBe('configured');
     expect(res.body).not.toContain('gsk-test-not-real');
@@ -62,6 +62,25 @@ describe('GET /api/exercises', () => {
   });
 });
 
+const startSession = () =>
+  app.inject({
+    method: 'PUT',
+    url: '/api/profile',
+    payload: {
+      profile: {
+        name: 'Asha',
+        fitnessLevel: 'beginner',
+        goals: ['general_fitness'],
+        trainingContext: 'recreationally_active',
+        equipment: [],
+        environment: { location: 'home' },
+        availableMinutes: 15,
+        schedule: { preferredDays: [], preferredTimes: [], workoutsPerWeek: 3 },
+      },
+      constraints: { restrictionTags: [], notes: '', source: 'self_reported' },
+    },
+  });
+
 describe('error handling', () => {
   it('answers unknown API paths with a JSON 404 (all planned areas are implemented)', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/not-a-planned-area/abc' });
@@ -77,6 +96,7 @@ describe('error handling', () => {
 
   it('turns schema validation failures into 400 with field issues', async () => {
     app.post('/api/test/validate', async (request) => parseWith(z.object({ effort: z.int().min(1).max(10) }), request.body));
+    await startSession(); // test routes are private by default
     const res = await app.inject({ method: 'POST', url: '/api/test/validate', payload: { effort: 42 } });
     expect(res.statusCode).toBe(400);
     const body = apiErrorSchema.parse(res.json());
@@ -86,6 +106,7 @@ describe('error handling', () => {
 
   it('turns malformed JSON into a 400', async () => {
     app.post('/api/test/echo', async (request) => request.body);
+    await startSession(); // test routes are private by default
     const res = await app.inject({
       method: 'POST',
       url: '/api/test/echo',
@@ -98,6 +119,7 @@ describe('error handling', () => {
 
   it('hides database error details behind a generic 500', async () => {
     app.get('/api/test/db', async () => db.prepare('SELECT * FROM table_that_does_not_exist').all());
+    await startSession(); // test routes are private by default
     const res = await app.inject({ method: 'GET', url: '/api/test/db' });
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toEqual({ code: 'database_error', message: 'A database error occurred' });
@@ -107,6 +129,7 @@ describe('error handling', () => {
     app.get('/api/test/crash', async () => {
       throw new Error('secret internal detail');
     });
+    await startSession(); // test routes are private by default
     const res = await app.inject({ method: 'GET', url: '/api/test/crash' });
     expect(res.statusCode).toBe(500);
     expect(res.json().error.code).toBe('internal_error');

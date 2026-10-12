@@ -7,13 +7,13 @@ import { exerciseLibrary } from '../../shared/exercises/library';
 import { historyResponseSchema } from '../../shared/schemas/history';
 import { workoutSchema, workoutSessionSchema } from '../../shared/schemas/workout';
 import { workout as fixtureWorkout } from '../fixtures/contracts';
-import { testConfig } from './helpers';
+import { testConfig, withCookieJar } from './helpers';
 
 let db: Database;
 let app: FastifyInstance;
 beforeEach(() => {
   db = openDatabase(':memory:');
-  app = buildApp({ config: testConfig, db });
+  app = withCookieJar(buildApp({ config: testConfig, db }));
 });
 afterEach(async () => {
   await app.close();
@@ -39,9 +39,9 @@ describe('simulateSessions', () => {
     }
   });
 
-  it('stays within the requested past weeks and misses some planned workouts', () => {
+  it('stays within the requested past weeks (at most one session per planned slot)', () => {
     const sessions = run();
-    expect(sessions.length).toBeLessThan(6 * 4);
+    expect(sessions.length).toBeLessThanOrEqual(6 * 4);
     for (const s of sessions) {
       expect(Date.parse(s.startedAt)).toBeLessThan(NOW.getTime());
       expect(Date.parse(s.startedAt)).toBeGreaterThanOrEqual(Date.parse('2026-08-17T00:00:00Z')); // 6 weeks before this week
@@ -52,7 +52,8 @@ describe('simulateSessions', () => {
     const sessions = run();
     const byHour = (h: number) => sessions.filter((s) => new Date(s.startedAt).getUTCHours() === h);
     const avg = (xs: typeof sessions) => xs.reduce((a, s) => a + s.metrics!.completionRatio, 0) / xs.length;
-    expect(byHour(7).length).toBeGreaterThan(byHour(19).length);
+    expect(byHour(7).length).toBeGreaterThanOrEqual(3); // enough sessions in BOTH slots to compare
+    expect(byHour(19).length).toBeGreaterThanOrEqual(3);
     expect(avg(byHour(7))).toBeGreaterThan(avg(byHour(19)));
   });
 
@@ -86,35 +87,40 @@ async function setupProfileAndWorkout() {
   return workoutSchema.parse((await app.inject({ method: 'POST', url: '/api/workouts/generate', payload: {} })).json());
 }
 
-async function completeRealSession(workoutId: string) {
-  const s = workoutSessionSchema.parse((await app.inject({ method: 'POST', url: '/api/sessions', payload: { workoutId } })).json());
-  const sets = [
-    {
-      exerciseId: 'squat',
-      detectedReps: 11,
-      validReps: 9,
-      invalidReps: 2,
-      metrics: { lowestPrimaryAngleDeg: 5, averageRepDurationMs: 2000, usableFrameRatio: 0.9 },
-      formIssues: [{ code: 'insufficient_depth', count: 2 }],
-      measurementSource: 'cv',
-    },
-  ];
+/** Finishes a session that performed every planned set; the first rep-based set carries 11 detected / 9 valid / 2 invalid reps. */
+async function completeRealSession(w: ReturnType<typeof workoutSchema.parse>) {
+  const s = workoutSessionSchema.parse((await app.inject({ method: 'POST', url: '/api/sessions', payload: { workoutId: w.id } })).json());
+  const firstRepItem = w.items.find((i) => i.target.type === 'reps')!;
+  const setOf = (exerciseId: string, valid: number, invalid = 0) => ({
+    exerciseId,
+    detectedReps: valid + invalid,
+    validReps: valid,
+    invalidReps: invalid,
+    metrics: { lowestPrimaryAngleDeg: 5, averageRepDurationMs: 2000, usableFrameRatio: 0.9 },
+    formIssues: invalid ? [{ code: 'insufficient_depth', count: invalid }] : [],
+    measurementSource: 'cv' as const,
+  });
+  const sets = w.items.flatMap((item) =>
+    Array.from({ length: item.sets }, (_, k) =>
+      item === firstRepItem && k === 0 ? setOf(item.exerciseId, 9, 2) : setOf(item.exerciseId, item.target.type === 'reps' ? 1 : 0),
+    ),
+  );
   await app.inject({ method: 'POST', url: `/api/sessions/${s.id}/complete`, payload: { status: 'completed', metrics: { sessionId: s.id, sets, completionRatio: 1, activeDurationSeconds: 600 } } });
   await app.inject({ method: 'PUT', url: `/api/sessions/${s.id}/feedback`, payload: { feedback: { effort: 6, enjoyment: 9, energy: 'high' } } });
-  return s.id;
+  return { id: s.id, sets };
 }
 
 const history = async (source?: string) =>
   historyResponseSchema.parse((await app.inject({ method: 'GET', url: `/api/history${source ? `?source=${source}` : ''}` })).json());
 
 describe('history API', () => {
-  it('requires a profile', async () => {
-    expect((await app.inject({ method: 'GET', url: '/api/history' })).statusCode).toBe(409);
+  it('requires a demo session (profile)', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/history' })).statusCode).toBe(401);
   });
 
   it('lists a real completed session with its metrics and feedback', async () => {
     const w = await setupProfileAndWorkout();
-    const id = await completeRealSession(w.id);
+    const { id, sets } = await completeRealSession(w);
     // An unfinished session is not listed.
     await app.inject({ method: 'POST', url: '/api/sessions', payload: { workoutId: w.id } });
 
@@ -125,20 +131,20 @@ describe('history API', () => {
       sessionId: id,
       workoutTitle: w.title,
       isSimulated: false,
-      totalReps: 11,
-      validReps: 9,
+      totalReps: sets.reduce((n, x) => n + x.detectedReps, 0),
+      validReps: sets.reduce((n, x) => n + x.validReps, 0),
       invalidReps: 2,
       completionRatio: 1,
       countsAsCompleted: true,
       feedback: { effort: 6, enjoyment: 9, energy: 'high' },
     });
     expect(h.metrics.totals).toMatchObject({ workoutsCompleted: 1, planned: 3 });
-    expect(h.metrics.totals.validRepRate).toBeCloseTo(9 / 11);
+    expect(h.metrics.totals.validRepRate).toBeCloseTo(sets.reduce((n, x) => n + x.validReps, 0) / sets.reduce((n, x) => n + x.detectedReps, 0));
   });
 
   it('keeps simulated data separate and clearly marked', async () => {
     const w = await setupProfileAndWorkout();
-    await completeRealSession(w.id);
+    await completeRealSession(w);
     const seeded = (await app.inject({ method: 'POST', url: '/api/history/simulated', payload: { weeks: 4 } })).json();
     expect(seeded.created).toBeGreaterThan(0);
 
@@ -151,7 +157,7 @@ describe('history API', () => {
 
   it('re-seeding replaces simulated data, and clearing removes only simulated data', async () => {
     const w = await setupProfileAndWorkout();
-    await completeRealSession(w.id);
+    await completeRealSession(w);
     await app.inject({ method: 'POST', url: '/api/history/simulated', payload: { weeks: 4 } });
     const again = (await app.inject({ method: 'POST', url: '/api/history/simulated', payload: { weeks: 4 } })).json();
     expect(again.replaced).toBe(again.created);

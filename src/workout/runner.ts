@@ -1,3 +1,4 @@
+import { genuineCompletionRatio } from '../../shared/metrics/completion';
 import type { ExerciseSetResult, PerformanceMetrics } from '../../shared/schemas/metrics';
 import type { SessionEventInput, WorkoutItem } from '../../shared/schemas/workout';
 
@@ -192,13 +193,13 @@ export function runnerReducer(s: RunnerState, a: RunnerAction): RunnerState {
   }
 }
 
-/** Deterministic session metrics from what was actually completed. */
+/** Deterministic session metrics from what was actually performed (sets with no valid reps do not count; see shared/metrics/completion). */
 export function buildPerformanceMetrics(s: RunnerState, sessionId: string): PerformanceMetrics {
-  const planned = totalSets(s);
+  const sets = s.sets.map((r) => r.result);
   return {
     sessionId,
-    sets: s.sets.map((r) => r.result),
-    completionRatio: planned > 0 ? s.sets.length / planned : 0,
+    sets,
+    completionRatio: genuineCompletionRatio(sets, s.items),
     activeDurationSeconds: Math.round(s.activeMs / 1000),
   };
 }

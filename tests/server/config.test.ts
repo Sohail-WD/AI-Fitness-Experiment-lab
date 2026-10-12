@@ -13,6 +13,15 @@ describe('loadConfig', () => {
       staticDir: null,
       corsOrigin: null,
       aiRateLimitPerMinute: 10,
+      trustProxy: false,
+      visitorRetentionDays: 30,
+      aiDailyLimitPerVisitor: 20,
+      aiDailyLimitTotal: 500,
+      newVisitorsPerIpPerHour: 10,
+      newVisitorsPerHourTotal: 200,
+      writeRateLimitPerMinute: 120,
+      secureCookies: false,
+      debugProxyHeaders: false,
     });
   });
 
@@ -29,8 +38,8 @@ describe('loadConfig', () => {
   });
 
   it('requires DATABASE_URL in production', () => {
-    expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow(/DATABASE_URL/);
-    expect(loadConfig({ NODE_ENV: 'production', DATABASE_URL: 'file:/var/data/app.db' }).databasePath).toBe('/var/data/app.db');
+    expect(() => loadConfig({ NODE_ENV: 'production', TRUST_PROXY: '1' })).toThrow(/DATABASE_URL/);
+    expect(loadConfig({ NODE_ENV: 'production', DATABASE_URL: 'file:/var/data/app.db', TRUST_PROXY: '1' }).databasePath).toBe('/var/data/app.db');
   });
 });
 

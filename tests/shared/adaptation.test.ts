@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AdaptationApplyError,
   AdaptationTransitionError,
+  appliedEffects,
   applyChangesToProfile,
   canAutoApply,
   classifyChange,
@@ -66,7 +67,7 @@ describe('proposal generation', () => {
       resultComputedAt: COMPUTED_AT,
       isSimulated: false,
     });
-    expect(d.rationale).toMatch(/^During this experiment, you completed 83% of your planned morning workouts/);
+    expect(d.rationale).toMatch(/^During this experiment, you completed 83% of the morning workouts you started/);
     expect(draftOf(proposeFromExperiment(experiment('morning_vs_evening'), result(0.4, 0.8), ctx())).changes[0].to).toEqual(['evening']);
   });
 
@@ -74,7 +75,7 @@ describe('proposal generation', () => {
     const shorter = draftOf(proposeFromExperiment(experiment('shorter_vs_longer'), result(0.9, 0.6), ctx({ minutes: 30 })));
     expect(shorter).toMatchObject({ title: 'Change workout length to 15 minutes', significance: 'significant', changes: [{ parameter: 'workout_duration', from: 30, to: 15 }] });
     const longer = draftOf(proposeFromExperiment(experiment('shorter_vs_longer'), result(0.5, 0.9), ctx({ minutes: 15 })));
-    expect(longer.changes).toEqual([{ parameter: 'workout_duration', from: 15, to: 30 }]);
+    expect(longer.changes).toEqual([{ parameter: 'workout_duration', from: 15, to: 45 }]); // the length the experiment actually used
   });
 
   it('carries the experiment\'s simulated flag onto the proposal', () => {
@@ -88,6 +89,20 @@ describe('proposal generation', () => {
     expect(skipped(experiment('morning_vs_evening'), null)).toEqual({ kind: 'skipped', reason: 'insufficient_evidence' });
     expect(skipped(experiment('morning_vs_evening', { status: 'ended_early' }), result(0.9, 0.2))).toEqual({ kind: 'skipped', reason: 'insufficient_evidence' });
     expect(skipped(experiment('morning_vs_evening', { status: 'active' }), result(0.9, 0.2))).toEqual({ kind: 'skipped', reason: 'insufficient_evidence' });
+  });
+
+  it('does not trust a stored "sufficient" flag: too few observations in a condition still means no proposal (M11)', () => {
+    const thin: ExperimentResult = {
+      ...result(0.9, 0.2),
+      sufficientData: true, // flag says yes, the observations say no
+      perCondition: [
+        { conditionId: 'A', observations: 6, metricValue: 0.9, planned: 6, completed: 5 },
+        { conditionId: 'B', observations: 1, metricValue: 0.2, planned: 1, completed: 0 },
+      ],
+    };
+    expect(proposeFromExperiment(experiment('morning_vs_evening'), thin, ctx())).toEqual({ kind: 'skipped', reason: 'insufficient_evidence' });
+    const noValue: ExperimentResult = { ...result(0.9, null), sufficientData: true };
+    expect(proposeFromExperiment(experiment('morning_vs_evening'), noValue, ctx())).toEqual({ kind: 'skipped', reason: 'insufficient_evidence' });
   });
 
   it('proposes nothing for a small difference, a settled config, or an unsupported experiment', () => {
@@ -142,7 +157,8 @@ describe('restrictions', () => {
     expect(violatesRestrictions(swap(['jump_squat']), c, exerciseLibrary)).toHaveLength(1);
     expect(violatesRestrictions(swap(['goblet_squat']), c, exerciseLibrary)).toHaveLength(1);
     expect(violatesRestrictions(swap(['made_up']), c, exerciseLibrary)).toEqual(['unknown exercise "made_up"']);
-    expect(violatesRestrictions(swap(['reverse_lunge']), c, exerciseLibrary)).toEqual([]);
+    expect(violatesRestrictions(swap(['reverse_lunge']), c, exerciseLibrary)).toHaveLength(1); // lunges are deep knee flexion too (M11)
+    expect(violatesRestrictions(swap(['wall_push_up']), c, exerciseLibrary)).toEqual([]);
     expect(violatesRestrictions([{ parameter: 'workout_duration', from: 30, to: 15 }], c, exerciseLibrary)).toEqual([]);
   });
 
@@ -238,5 +254,33 @@ describe('proposal lifecycle', () => {
   it('a minor safe change may be auto-applied, but simulated ones may not', () => {
     expect(transitionProposal(minor, 'auto_apply', NOW, WORKOUT)).toMatchObject({ status: 'auto_applied', appliedAt: NOW.toISOString() });
     expect(() => transitionProposal({ ...minor, isSimulated: true }, 'auto_apply', NOW)).toThrow(AdaptationTransitionError);
+  });
+});
+
+describe('what applying actually changed (M11)', () => {
+  const facts = (minutes: number, estimated: number, times: ('morning' | 'afternoon' | 'evening')[] = [], perWeek = 3) => ({
+    estimatedMinutes: estimated,
+    requirements: { targetDurationMinutes: minutes, preferredTimes: times, workoutsPerWeek: perWeek },
+  });
+
+  it('reports a timing change only when the next workout really carries the new planned time', () => {
+    const change: AdaptationChange[] = [{ parameter: 'workout_timing', from: [], to: ['morning'] }];
+    const [line] = appliedEffects(change, facts(30, 29, ['morning']), facts(30, 29, []));
+    expect(line).toMatch(/planned for morning/);
+    expect(line).toMatch(/does not change which exercises/);
+  });
+
+  it('does not claim a change when the next workout is identical in the changed setting', () => {
+    const change: AdaptationChange[] = [{ parameter: 'workout_timing', from: ['morning'], to: ['morning'] }];
+    expect(appliedEffects(change, facts(30, 29, ['morning']), facts(30, 29, ['morning']))).toEqual([
+      'Your settings were updated, but the next workout did not change.',
+    ]);
+    const duration: AdaptationChange[] = [{ parameter: 'workout_duration', from: 30, to: 30 }];
+    expect(appliedEffects(duration, facts(30, 29), facts(30, 28))).toEqual(['Your settings were updated, but the next workout did not change.']);
+  });
+
+  it('reports a duration change with the real new length', () => {
+    const change: AdaptationChange[] = [{ parameter: 'workout_duration', from: 30, to: 15 }];
+    expect(appliedEffects(change, facts(15, 14), facts(30, 29))).toEqual(['Your next workout is built for 15 minutes (about 14 min).']);
   });
 });

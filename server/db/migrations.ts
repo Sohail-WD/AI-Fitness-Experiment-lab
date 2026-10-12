@@ -177,4 +177,36 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX idx_adaptation_user ON adaptation_proposals (user_id, created_at);
     `,
   },
+  {
+    version: 4,
+    name: 'workout_experiment_assignment',
+    // M11: a workout generated during an active experiment is assigned to condition A or B.
+    sql: `
+      ALTER TABLE workouts ADD COLUMN experiment_id TEXT REFERENCES experiments(id) ON DELETE SET NULL;
+      ALTER TABLE workouts ADD COLUMN condition_id TEXT CHECK (condition_id IN ('A', 'B'));
+      ALTER TABLE workouts ADD COLUMN condition_label TEXT;
+      CREATE INDEX idx_workouts_experiment ON workouts (experiment_id) WHERE experiment_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 5,
+    name: 'anonymous_visitors',
+    // Public demo: one anonymous visitor per browser. visitors.id is the visitor's user id (user_profiles.id);
+    // only a SHA-256 hash of the cookie token is stored. ai_usage counts AI analyses per visitor per UTC day.
+    sql: `
+      CREATE TABLE visitors (
+        id           TEXT PRIMARY KEY,
+        token_hash   TEXT NOT NULL UNIQUE,
+        created_at   TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_visitors_last_seen ON visitors (last_seen_at);
+      CREATE TABLE ai_usage (
+        visitor_id TEXT NOT NULL,
+        day        TEXT NOT NULL,
+        count      INTEGER NOT NULL DEFAULT 0 CHECK (count >= 0),
+        PRIMARY KEY (visitor_id, day)
+      );
+    `,
+  },
 ];

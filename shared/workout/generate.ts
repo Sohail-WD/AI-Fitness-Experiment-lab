@@ -211,6 +211,10 @@ function buildRationale(
     `Estimated ${estimatedMinutes} min, within your ${req.targetDurationMinutes}-minute session: ${mainCount} main exercise${mainCount === 1 ? '' : 's'} plus warm-up and cool-down.`,
   );
 
+  if (req.preferredTimes.length > 0) {
+    lines.push(`Planned for your preferred time: ${req.preferredTimes.join(' or ')}. The time is for planning only; it does not change which exercises are chosen.`);
+  }
+
   const spaceExcluded = req.exclusions.filter((x) => x.reason === 'space');
   lines.push(
     `Planned for training at ${LOCATION_LABEL[req.location].toLowerCase()}.` +
