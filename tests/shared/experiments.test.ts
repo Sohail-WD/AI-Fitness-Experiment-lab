@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyLifecycle,
   assignCondition,
+  assignmentNotice,
   describeResult,
   evaluateExperiment,
   type ExperimentSession,
@@ -14,6 +15,7 @@ import {
   nextCondition,
   OBSERVATION_CAVEAT,
   refreshExperiment,
+  timeWindowWarning,
 } from '../../shared/experiments/engine';
 import type { Experiment } from '../../shared/schemas/experiment';
 import { experimentResultSchema } from '../../shared/schemas/experiment';
@@ -287,5 +289,153 @@ describe('metrics and results', () => {
     expect(r.perCondition[0].observations).toBe(3);
     expect(r.perCondition[1]).toMatchObject({ observations: 1, metricValue: 0.5 });
     expect(r.sufficientData).toBe(false);
+  });
+});
+
+describe('time-aware assignment (usability fix)', () => {
+  const e = experiment('morning_vs_evening', { status: 'active', startedAt: '2026-09-07T00:00:00Z', timezoneOffsetMinutes: 0 });
+  const at = (iso: string) => new Date(iso);
+
+  it('on a tie, prefers the condition whose window contains the current local time', () => {
+    expect(nextCondition(e, [], at('2026-09-08T19:00:00Z'))).toBe('B'); // evening → Evening
+    expect(nextCondition(e, [], at('2026-09-08T07:00:00Z'))).toBe('A'); // morning → Morning
+    expect(nextCondition(e, [], at('2026-09-08T14:00:00Z'))).toBe('A'); // afternoon: neither window → A
+    expect(nextCondition(e, [])).toBe('A'); // no clock given → A
+    const tied = [session('2026-09-08T07:00:00Z', { assigned: [e, 'A'] }), session('2026-09-08T19:00:00Z', { assigned: [e, 'B'] })];
+    expect(nextCondition(e, tied, at('2026-09-09T20:00:00Z'))).toBe('B');
+  });
+
+  it('uses the experiment\'s timezone for "now"', () => {
+    const ist = experiment('morning_vs_evening', { status: 'active', startedAt: '2026-09-07T00:00:00Z', timezoneOffsetMinutes: -330 });
+    expect(nextCondition(ist, [], at('2026-09-08T13:30:00Z'))).toBe('B'); // 19:00 IST
+    expect(nextCondition(ist, [], at('2026-09-08T01:30:00Z'))).toBe('A'); // 07:00 IST
+  });
+
+  it('keeps balanced assignment when the counts differ, whatever the time', () => {
+    const oneA = [session('2026-09-08T07:00:00Z', { assigned: [e, 'A'] })];
+    expect(nextCondition(e, oneA, at('2026-09-09T07:00:00Z'))).toBe('B'); // morning now, but B is behind
+    const oneB = [session('2026-09-08T19:00:00Z', { assigned: [e, 'B'] })];
+    expect(nextCondition(e, oneB, at('2026-09-09T19:00:00Z'))).toBe('A'); // evening now, but A is behind
+  });
+
+  it('never re-assigns by start time: an off-window session still belongs to no condition', () => {
+    const off = session('2026-09-08T19:00:00Z', { assigned: [e, 'A'] }); // assigned Morning, started in the evening
+    expect(assignCondition(e, off)).toBeNull();
+    const r = evaluateExperiment(e, [off], NOW);
+    expect(r.perCondition.map((p) => p.observations)).toEqual([0, 0]);
+  });
+});
+
+describe('pre-workout time-window warning', () => {
+  const active = experiment('morning_vs_evening', { status: 'active', startedAt: '2026-09-07T00:00:00Z', timezoneOffsetMinutes: 0 });
+
+  it('warns when the assigned window does not contain the current local time', () => {
+    const w = timeWindowWarning(active, 'A', new Date('2026-09-08T19:30:00Z'));
+    expect(w).toMatch(/Morning \(5:00–11:59\)/);
+    expect(w).toMatch(/will not count/);
+    expect(timeWindowWarning(active, 'B', new Date('2026-09-08T07:30:00Z'))).toMatch(/Evening/);
+    expect(timeWindowWarning(active, 'A', new Date('2026-09-08T14:00:00Z'))).not.toBeNull(); // afternoon fits neither
+  });
+
+  it('is silent inside the window, for duration conditions, and for experiments that are not active real ones', () => {
+    expect(timeWindowWarning(active, 'A', new Date('2026-09-08T07:30:00Z'))).toBeNull();
+    expect(timeWindowWarning(active, 'B', new Date('2026-09-08T19:30:00Z'))).toBeNull();
+    const duration = experiment('shorter_vs_longer', { status: 'active', startedAt: '2026-09-07T00:00:00Z' });
+    expect(timeWindowWarning(duration, 'A', new Date('2026-09-08T03:00:00Z'))).toBeNull();
+    expect(timeWindowWarning({ ...active, status: 'completed' }, 'A', new Date('2026-09-08T19:30:00Z'))).toBeNull();
+    expect(timeWindowWarning({ ...active, status: 'ended_early' }, 'A', new Date('2026-09-08T19:30:00Z'))).toBeNull();
+    expect(timeWindowWarning({ ...active, isSimulated: true }, 'A', new Date('2026-09-08T19:30:00Z'))).toBeNull();
+  });
+
+  it('respects the experiment timezone', () => {
+    const ist = { ...active, timezoneOffsetMinutes: -330 };
+    expect(timeWindowWarning(ist, 'A', new Date('2026-09-08T01:30:00Z'))).toBeNull(); // 07:00 IST
+    expect(timeWindowWarning(ist, 'A', new Date('2026-09-08T14:30:00Z'))).not.toBeNull(); // 20:00 IST
+  });
+});
+
+describe('sessions excluded for starting outside their window', () => {
+  it('counts finished, genuine sessions of this experiment that started outside their assigned window', () => {
+    const e = experiment('morning_vs_evening', { status: 'active', startedAt: '2026-09-07T00:00:00Z', timezoneOffsetMinutes: 0 });
+    const other = experiment('morning_vs_evening', { status: 'active', startedAt: '2026-09-07T00:00:00Z' });
+    const list = [
+      session('2026-09-08T07:00:00Z', { assigned: [e, 'A'] }), // counted for A
+      session('2026-09-08T19:00:00Z', { assigned: [e, 'A'] }), // A, but evening: excluded
+      session('2026-09-09T14:00:00Z', { assigned: [e, 'A'] }), // A, afternoon: excluded
+      session('2026-09-09T07:00:00Z', { assigned: [e, 'B'] }), // B, but morning: excluded
+      session('2026-09-10T19:00:00Z', { assigned: [e, 'B'], genuine: 0 }), // click-through: not an observation at all
+      session('2026-09-10T20:00:00Z', { assigned: [e, 'A'], status: 'in_progress' }), // unfinished: not counted
+      session('2026-09-10T20:00:00Z', { assigned: [other, 'A'] }), // another experiment
+      session('2026-09-11T20:00:00Z'), // unassigned
+    ];
+    const r = evaluateExperiment(e, list, NOW);
+    expect(experimentResultSchema.safeParse(r).success).toBe(true);
+    const [a, b] = r.perCondition;
+    expect(a).toMatchObject({ observations: 1, excludedOutsideWindow: 2 });
+    expect(b).toMatchObject({ observations: 0, excludedOutsideWindow: 1 });
+  });
+
+  it('reports nothing when every session followed its window, and nothing for duration or simulated experiments', () => {
+    const e = experiment('morning_vs_evening', { status: 'active', startedAt: '2026-09-07T00:00:00Z' });
+    const r = evaluateExperiment(e, [session('2026-09-08T07:00:00Z', { assigned: [e, 'A'] })], NOW);
+    expect(r.perCondition.every((p) => p.excludedOutsideWindow === undefined)).toBe(true);
+    const d = experiment('shorter_vs_longer', { status: 'active', startedAt: '2026-09-07T00:00:00Z' });
+    const rd = evaluateExperiment(d, [session('2026-09-08T03:00:00Z', { assigned: [d, 'A'] })], NOW);
+    expect(rd.perCondition.every((p) => p.excludedOutsideWindow === undefined)).toBe(true);
+    const sim = experiment('morning_vs_evening', { status: 'active', isSimulated: true, startedAt: NOW.toISOString() });
+    const rs = evaluateExperiment(sim, [session('2026-09-08T14:00:00Z', { isSimulated: true })], NOW);
+    expect(rs.perCondition.every((p) => p.excludedOutsideWindow === undefined)).toBe(true);
+  });
+});
+
+describe('Follow-Along assignment notice', () => {
+  const active = experiment('morning_vs_evening', { status: 'active', startedAt: '2026-09-07T00:00:00Z', timezoneOffsetMinutes: 0 });
+  const assigned = (e: Experiment, conditionId: 'A' | 'B') => ({ experimentId: e.id, conditionId, label: e.conditions.find((c) => c.id === conditionId)!.label });
+  const evening = new Date('2026-09-08T19:30:00Z');
+  const morning = new Date('2026-09-08T07:30:00Z');
+
+  it('inside the window: informational, naming the condition and its hours', () => {
+    expect(assignmentNotice(assigned(active, 'B'), active, evening)).toEqual({
+      kind: 'info',
+      text: 'This workout counts toward your experiment as Evening (17:00–22:59). Start it within that time window.',
+    });
+    expect(assignmentNotice(assigned(active, 'A'), active, morning)).toMatchObject({ kind: 'info', text: expect.stringContaining('Morning (5:00–11:59)') });
+  });
+
+  it('outside the window: a warning that the session will not count', () => {
+    const n = assignmentNotice(assigned(active, 'A'), active, evening);
+    expect(n?.kind).toBe('warning');
+    expect(n?.text).toMatch(/Morning \(5:00–11:59\).*will not count/);
+    expect(assignmentNotice(assigned(active, 'B'), active, new Date('2026-09-08T14:00:00Z'))?.kind).toBe('warning'); // afternoon
+  });
+
+  it('uses the experiment timezone, like observation counting', () => {
+    const ist = { ...active, timezoneOffsetMinutes: -330 };
+    expect(assignmentNotice(assigned(ist, 'B'), ist, new Date('2026-09-08T14:30:00Z'))?.kind).toBe('info'); // 20:00 IST
+    expect(assignmentNotice(assigned(ist, 'B'), ist, new Date('2026-09-08T19:30:00Z'))?.kind).toBe('warning'); // 01:00 IST
+    // The same session start counts exactly when the notice is "info".
+    const s = session('2026-09-08T14:30:00Z', { assigned: [ist, 'B'] });
+    expect(assignCondition(ist, s)).toBe('B');
+  });
+
+  it('when the experiment could not be loaded: an uncertainty notice from the assignment stored on the workout', () => {
+    const n = assignmentNotice(assigned(active, 'B'), 'unavailable', evening);
+    expect(n?.kind).toBe('unknown');
+    expect(n?.text).toContain('Evening (17:00–22:59)');
+    expect(n?.text).toMatch(/could not be checked/);
+  });
+
+  it('shows nothing for unassigned workouts, duration, simulated, ended or missing experiments', () => {
+    expect(assignmentNotice(null, active, evening)).toBeNull();
+    expect(assignmentNotice(null, 'unavailable', evening)).toBeNull();
+    const duration = experiment('shorter_vs_longer', { status: 'active', startedAt: '2026-09-07T00:00:00Z' });
+    expect(assignmentNotice(assigned(duration, 'A'), duration, evening)).toBeNull();
+    for (const status of ['completed', 'ended_early', 'skipped', 'proposed'] as const) {
+      expect(assignmentNotice(assigned(active, 'A'), { ...active, status }, evening), status).toBeNull();
+    }
+    expect(assignmentNotice(assigned(active, 'A'), { ...active, isSimulated: true }, evening)).toBeNull();
+    expect(assignmentNotice(assigned(active, 'A'), null, evening)).toBeNull(); // deleted / not found
+    const other = experiment('morning_vs_evening', { status: 'active', startedAt: '2026-09-07T00:00:00Z' });
+    expect(assignmentNotice(assigned(active, 'A'), other, evening)).toBeNull(); // a different experiment
   });
 });

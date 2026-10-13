@@ -42,9 +42,9 @@ Profile → Workout → Follow-Along (+ camera) → History → Experiments → 
 
 ### Experiment A/B assignment
 
-- While a **real** experiment is active, every workout you generate on the Workout tab is **assigned to condition A or B**, alternately: the condition with fewer used sessions gets the next workout (ties go to A). The assignment is stored on the workout and shown in "Why this workout?".
+- While a **real** experiment is active, every workout you generate on the Workout tab is **assigned to condition A or B**, alternately: the condition with fewer used sessions gets the next workout; on a tie, the condition whose time window you are in when generating it (otherwise A). The assignment is fixed when the workout is generated and is stored on it and shown in "Why this workout?".
 - *Shorter vs longer* workouts are generated at exactly **15 or 45 minutes**.
-- *Morning vs evening* workouts must be **started inside the assigned window** (05:00–11:59 or 17:00–22:59 local time); a session started at another time is ignored.
+- *Morning vs evening* workouts must be **started inside the assigned window** (05:00–11:59 or 17:00–22:59 local time); a session started at another time is not counted. Before you start, Follow-Along shows the assignment: an informational note inside the window, a warning outside it, or an uncertainty note if the experiment could not be loaded. The Experiments page shows how many sessions were not counted for starting outside their window.
 - An **observation** is a finished session of an assigned workout with at least one counted **main-exercise** set. Warm-up/cool-down only, click-through sessions, and workouts generated before the experiment started do not count. Regenerating a workout does not use up a slot.
 - Each condition needs **3 observations** before a result is shown. Adherence = sessions meeting the 80% rule ÷ observations.
 - An adaptation proposal is only created from a completed experiment, after re-checking that every condition really has enough observations and a clear difference (≥ 10 percentage points).
@@ -58,7 +58,7 @@ Profile → Workout → Follow-Along (+ camera) → History → Experiments → 
 
 ### Preferred time and adaptations
 
-- Your preferred time is stored on every generated workout and shown in its plan. It is a planning label: it does **not** change which exercises are chosen.
+- Your preferred time is stored on every generated workout and shown in its plan. It is a planning label: it does **not** change which exercises are chosen, and it never influences experiment A/B assignment. If a time-of-day experiment assigns a different window, the plan says the experiment assignment takes priority while the experiment runs.
 - When a proposal is applied, the app reports only what really changed in the next workout (for example its new length), or says that the workout did not change.
 
 ## Run locally
@@ -113,7 +113,7 @@ All are read by the backend only; nothing here reaches the browser bundle. See `
 ## Tests
 
 ```bash
-npm test            # 390 tests in 30 files
+npm test            # 409 tests in 30 files
 npm run typecheck
 npm run build
 ```

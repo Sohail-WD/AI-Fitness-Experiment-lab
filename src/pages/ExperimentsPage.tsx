@@ -52,6 +52,12 @@ function ExperimentCard({ item, onAction, busy }: { item: ExperimentWithResult; 
                 {p?.sessionIds && ` · ${p.sessionIds.length} session${p.sessionIds.length === 1 ? '' : 's'}`}
               </span>
               <span className="condition-value">{fmtValue(e.primaryMetric, p?.metricValue ?? null)}</span>
+              {!!p?.excludedOutsideWindow && (
+                <span className="hint">
+                  {p.excludedOutsideWindow} session{p.excludedOutsideWindow === 1 ? '' : 's'} not counted: started outside the assigned time
+                  window
+                </span>
+              )}
             </div>
           );
         })}

@@ -120,14 +120,17 @@ export function localHour(iso: string, timezoneOffsetMinutes = 0): number {
 
 type Condition = Experiment['conditions'][number];
 
-/** A time-of-day condition only counts sessions that actually started in its window. */
-function onProtocol(c: Condition, s: ExperimentSession, tz: number): boolean {
+/** Whether an ISO time falls inside a condition's time-of-day window (always true for conditions without one). */
+function inTimeWindow(c: Condition, iso: string, tz: number): boolean {
   const t = c.parameters.timeOfDay;
   if (typeof t !== 'string') return true;
   const window = TIME_WINDOWS[t as keyof typeof TIME_WINDOWS];
-  const h = localHour(s.summary.startedAt, tz);
+  const h = localHour(iso, tz);
   return !!window && h >= window[0] && h < window[1];
 }
+
+/** A time-of-day condition only counts sessions that actually started in its window. */
+const onProtocol = (c: Condition, s: ExperimentSession, tz: number) => inTimeWindow(c, s.summary.startedAt, tz);
 
 /** Simulated demo sessions have no stored assignment; they follow a built-in alternating pattern and are matched by it. */
 function inferSimulated(c: Condition, s: ExperimentSession, tz: number): boolean {
@@ -160,10 +163,14 @@ export const isObservation = (s: ExperimentSession) => s.summary.status !== 'in_
 
 /**
  * The condition the NEXT generated workout is assigned to: whichever has fewer
- * on-protocol sessions (finished with real work, or still in progress); ties go to A.
- * Sessions that did not follow the protocol or did no genuine work do not use up a slot.
+ * on-protocol sessions (finished with real work, or still in progress). On a tie,
+ * the condition whose time window contains `now` (the user's local time) is
+ * preferred, so a workout generated in the evening is not sent to the morning;
+ * otherwise A. Sessions that did not follow the protocol or did no genuine work
+ * do not use up a slot. The assignment is fixed when the workout is generated;
+ * the session's eventual start time never changes it.
  */
-export function nextCondition(experiment: Experiment, all: readonly ExperimentSession[]): 'A' | 'B' {
+export function nextCondition(experiment: Experiment, all: readonly ExperimentSession[], now?: Date): 'A' | 'B' {
   const tz = experiment.timezoneOffsetMinutes ?? 0;
   const used = (c: Condition) =>
     all.filter(
@@ -175,7 +182,66 @@ export function nextCondition(experiment: Experiment, all: readonly ExperimentSe
         (s.summary.status === 'in_progress' || isObservation(s)),
     ).length;
   const [a, b] = experiment.conditions;
-  return used(b) < used(a) ? b.id : a.id;
+  const usedA = used(a);
+  const usedB = used(b);
+  if (usedA !== usedB) return usedB < usedA ? b.id : a.id;
+  const current = now ? experiment.conditions.find((c) => typeof c.parameters.timeOfDay === 'string' && inTimeWindow(c, now.toISOString(), tz)) : undefined;
+  return current?.id ?? a.id;
+}
+
+/**
+ * Warning for starting an assigned workout now, or null when it is fine: the
+ * experiment is still active and the condition's time window does not contain
+ * `now`. A session started now would not count toward the experiment.
+ */
+export function timeWindowWarning(experiment: Experiment, conditionId: 'A' | 'B', now: Date): string | null {
+  if (experiment.status !== 'active' || experiment.isSimulated) return null;
+  const c = experiment.conditions.find((x) => x.id === conditionId);
+  if (!c || typeof c.parameters.timeOfDay !== 'string') return null;
+  const tz = experiment.timezoneOffsetMinutes ?? 0;
+  if (inTimeWindow(c, now.toISOString(), tz)) return null;
+  return (
+    `This workout is assigned to ${c.label} for your experiment. Starting it now is outside that time window, ` +
+    'so the session will not count toward the experiment. You can still do the workout, or start it within the window.'
+  );
+}
+
+export interface AssignmentNotice {
+  kind: 'info' | 'warning' | 'unknown';
+  text: string;
+}
+
+/**
+ * What Follow-Along tells the user about an assigned workout before they start it.
+ * `experiment`: the assigned experiment; `null` if it no longer exists (or is not
+ * this visitor's); `'unavailable'` if the experiment list could not be loaded.
+ * - info: active real time-of-day experiment and `now` is inside the condition's window;
+ * - warning: outside the window (the session would not count);
+ * - unknown: the experiment could not be checked; the stored assignment label is shown;
+ * - null: unassigned workout, duration condition, simulated or no-longer-active experiment.
+ * Uses the experiment's stored timezone, exactly like observation counting.
+ */
+export function assignmentNotice(
+  assignment: { experimentId: string; conditionId: 'A' | 'B'; label: string } | null,
+  experiment: Experiment | null | 'unavailable',
+  now: Date,
+): AssignmentNotice | null {
+  if (!assignment) return null;
+  if (experiment === 'unavailable') {
+    return {
+      kind: 'unknown',
+      text:
+        `This workout is assigned to ${assignment.label} for your experiment, but the experiment could not be checked right now. ` +
+        'It only counts if it follows that assignment (for a time-of-day condition: start it within that time window).',
+    };
+  }
+  if (!experiment || experiment.id !== assignment.experimentId) return null;
+  if (experiment.status !== 'active' || experiment.isSimulated) return null;
+  const c = experiment.conditions.find((x) => x.id === assignment.conditionId);
+  if (!c || typeof c.parameters.timeOfDay !== 'string') return null;
+  const warning = timeWindowWarning(experiment, assignment.conditionId, now);
+  if (warning) return { kind: 'warning', text: warning };
+  return { kind: 'info', text: `This workout counts toward your experiment as ${c.label}. Start it within that time window.` };
 }
 
 /* ---------- evaluation ---------- */
@@ -238,12 +304,18 @@ export function evaluateExperiment(e: Experiment, all: ExperimentSession[], now:
       Date.parse(s.summary.startedAt) < end.getTime(),
   );
 
+  const tz = e.timezoneOffsetMinutes ?? 0;
   const perCondition = e.conditions.map((c) => {
     const assigned = inWindow.filter((s) => assignCondition(e, s) === c.id).map((s) => s.summary);
+    // Real sessions of workouts assigned to this condition that were started outside its time window (not counted).
+    const outsideWindow = e.isSimulated
+      ? 0
+      : inWindow.filter((s) => !s.summary.isSimulated && s.assignment?.experimentId === e.id && s.assignment.conditionId === c.id && !onProtocol(c, s, tz)).length;
     return {
       conditionId: c.id,
       sessionIds: assigned.map((s) => s.sessionId),
       ...conditionMetric(e.primaryMetric, assigned),
+      ...(outsideWindow > 0 ? { excludedOutsideWindow: outsideWindow } : {}),
     };
   });
 

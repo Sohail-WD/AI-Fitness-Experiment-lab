@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
+import { assignmentNotice } from '../../shared/experiments/engine';
+import { type Experiment, experimentListSchema } from '../../shared/schemas/experiment';
 import { type Workout, workoutSchema } from '../../shared/schemas/workout';
 import { apiGet } from '../lib/api';
 import { FeedbackForm } from '../workout/FeedbackForm';
@@ -17,12 +19,31 @@ type Stage =
 export function FollowAlongPage() {
   const [stage, setStage] = useState<Stage>({ kind: 'loading' });
   const [error, setError] = useState<string | null>(null);
+  // null while loading; 'unavailable' if the list could not be loaded (then the notice says so instead of staying silent).
+  const [experiments, setExperiments] = useState<Experiment[] | 'unavailable' | null>(null);
+  const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
     apiGet('/workouts/latest', workoutSchema)
       .then((workout) => setStage({ kind: 'ready', workout }))
       .catch(() => setStage({ kind: 'none' }));
+    // Needed for the experiment assignment notice.
+    apiGet('/experiments', experimentListSchema)
+      .then((list) => setExperiments(list.experiments.map((i) => i.experiment)))
+      .catch(() => setExperiments('unavailable'));
   }, []);
+
+  // Keep the notice current while the page stays open (windows start and end on the hour).
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const assignment = stage.kind === 'ready' ? stage.workout.assignment : null;
+  const notice =
+    !assignment || experiments === null
+      ? null
+      : assignmentNotice(assignment, experiments === 'unavailable' ? 'unavailable' : (experiments.find((e) => e.id === assignment.experimentId) ?? null), now);
 
   const begin = async (workout: Workout) => {
     setError(null);
@@ -64,6 +85,11 @@ export function FollowAlongPage() {
           <p>
             <strong>{stage.workout.title}</strong>: {stage.workout.items.length} exercises, about {stage.workout.estimatedMinutes} min.
           </p>
+          {notice && (
+            <p className={notice.kind === 'info' ? 'success' : 'notice'} role={notice.kind === 'warning' ? 'alert' : 'status'}>
+              {notice.text}
+            </p>
+          )}
           <button type="button" onClick={() => begin(stage.workout)}>
             Start session
           </button>

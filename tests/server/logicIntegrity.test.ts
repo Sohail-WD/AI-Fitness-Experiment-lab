@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../server/app';
 import { type Database, openDatabase } from '../../server/db/database';
 import { insertExperiment, saveResult } from '../../server/repositories/experimentRepository';
@@ -201,11 +201,83 @@ describe('experiments assign and count real sessions (M11)', () => {
     expect(r.perCondition.map((p) => p.observations)).toEqual([0, 0]);
   });
 
-  it('morning-vs-evening: the first workout is assigned to the morning condition and says when to do it', async () => {
-    const e = await startReal('morning_vs_evening');
-    const w = await generate();
-    expect(w.assignment).toMatchObject({ experimentId: e.id, conditionId: 'A' });
-    expect(w.rationale.join(' ')).toMatch(/Morning.*time window/);
+  describe('morning-vs-evening with a controlled clock (experiment timezone UTC)', () => {
+    const at = (iso: string) => vi.setSystemTime(new Date(iso));
+    beforeEach(() => vi.useFakeTimers({ toFake: ['Date'] }));
+    afterEach(() => vi.useRealTimers());
+
+    it('a workout generated in the morning is assigned to Morning and says when to do it', async () => {
+      at('2026-10-12T07:00:00Z');
+      const e = await startReal('morning_vs_evening');
+      at('2026-10-12T07:05:00Z');
+      const w = await generate();
+      expect(w.assignment).toMatchObject({ experimentId: e.id, conditionId: 'A' });
+      expect(w.rationale.join(' ')).toMatch(/Morning.*time window/);
+    });
+
+    it('a workout generated in the evening on a tie is assigned to Evening (the reported bug)', async () => {
+      at('2026-10-12T19:00:00Z');
+      const e = await startReal('morning_vs_evening');
+      at('2026-10-12T19:05:00Z');
+      const w = await generate();
+      expect(w.assignment).toMatchObject({ experimentId: e.id, conditionId: 'B' });
+      // Done right away, inside the Evening window: it counts.
+      at('2026-10-12T19:10:00Z');
+      await runSession(w, 8);
+      at('2026-10-12T20:00:00Z');
+      const r = experimentListSchema.parse((await app.inject({ method: 'GET', url: '/api/experiments' })).json()).experiments[0].result!;
+      expect(r.perCondition.map((p) => p.observations)).toEqual([0, 1]);
+      // Balance then wins over the clock: next is Morning even though it is still evening.
+      at('2026-10-12T20:05:00Z');
+      expect((await generate()).assignment?.conditionId).toBe('A');
+    });
+
+    it('an Evening assignment stays Evening when the profile prefers Morning, and the plan explains the priority', async () => {
+      await put('/api/profile', profileBody({ times: ['morning'] }));
+      at('2026-10-12T19:00:00Z');
+      const e = await startReal('morning_vs_evening');
+      at('2026-10-12T19:05:00Z');
+      const w = await generate();
+      expect(w.assignment).toMatchObject({ experimentId: e.id, conditionId: 'B' }); // preference does not affect A/B
+      expect(w.requirements.preferredTimes).toEqual(['morning']);
+      const why = w.rationale.join(' ');
+      expect(why).toContain('Your experiment assignment (Evening) takes priority over your preferred time (morning) while the experiment runs.');
+      expect(why).not.toContain('Planned for your preferred time');
+      expect(why).toMatch(/Experiment assignment: condition B, Evening/);
+    });
+
+    it('keeps the ordinary preferred-time wording when the preference matches the assigned window', async () => {
+      await put('/api/profile', profileBody({ times: ['evening'] }));
+      at('2026-10-12T19:00:00Z');
+      await startReal('morning_vs_evening');
+      at('2026-10-12T19:05:00Z');
+      const why = (await generate()).rationale.join(' ');
+      expect(why).toContain('Planned for your preferred time: evening.');
+      expect(why).not.toContain('takes priority');
+    });
+
+    it('an off-window session is not counted, is reported as excluded, and does not use up the slot', async () => {
+      at('2026-10-12T07:00:00Z');
+      await startReal('morning_vs_evening');
+      at('2026-10-12T07:05:00Z');
+      const w = await generate(); // Morning
+      at('2026-10-12T19:00:00Z'); // ...but done in the evening
+      await runSession(w, 8);
+      at('2026-10-12T20:00:00Z');
+      const r = experimentListSchema.parse((await app.inject({ method: 'GET', url: '/api/experiments' })).json()).experiments[0].result!;
+      expect(r.perCondition.map((p) => p.observations)).toEqual([0, 0]);
+      expect(r.perCondition[0].excludedOutsideWindow).toBe(1);
+      expect(r.perCondition[1].excludedOutsideWindow).toBeUndefined();
+      expect((await generate()).assignment?.conditionId).toBe('B'); // still a tie; evening now → Evening
+    });
+  });
+
+  it('a duration experiment keeps the ordinary preferred-time wording', async () => {
+    await put('/api/profile', profileBody({ times: ['morning'] }));
+    await startReal('shorter_vs_longer');
+    const why = (await generate()).rationale.join(' ');
+    expect(why).toContain('Planned for your preferred time: morning.');
+    expect(why).not.toContain('takes priority');
   });
 
   it('workouts generated outside an experiment carry no assignment', async () => {
@@ -262,6 +334,9 @@ describe('preferred workout time really affects the generated workout (M11)', ()
     const withTime = await generate();
     expect(withTime.requirements.preferredTimes).toEqual(['morning']);
     expect(withTime.rationale.join(' ')).toMatch(/Planned for your preferred time: morning/);
+    expect(withTime.rationale.join(' ')).toContain(
+      'Planned for your preferred time: morning. The time is for planning only; it does not change which exercises are chosen.',
+    ); // ordinary workouts keep the existing wording
     // It is a planning label: the exercise selection for the same seed is unchanged.
     expect(withTime.items.map((i) => i.exerciseId)).toEqual(without.items.map((i) => i.exerciseId));
   });

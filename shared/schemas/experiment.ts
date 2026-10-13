@@ -61,6 +61,8 @@ export const experimentResultSchema = z.object({
       planned: z.int().nonnegative().optional(),
       /** Sessions meeting the completion rule. */
       completed: z.int().nonnegative().optional(),
+      /** Finished sessions of workouts assigned to this condition that started outside its time window (not counted). */
+      excludedOutsideWindow: z.int().nonnegative().optional(),
     }),
   ),
   sufficientData: z.boolean(),

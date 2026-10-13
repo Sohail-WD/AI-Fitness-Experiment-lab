@@ -1,4 +1,5 @@
 import { type ExperimentSession, nextCondition } from '../../shared/experiments/engine.ts';
+import { PREFERRED_TIME_PREFIX } from '../../shared/workout/generate.ts';
 import { countGenuineSets } from '../../shared/metrics/completion.ts';
 import { summarizeSession } from '../../shared/metrics/history.ts';
 import type { Experiment } from '../../shared/schemas/experiment.ts';
@@ -57,7 +58,7 @@ export function activeAssignment(db: Database, userId: string, now: Date): Activ
   if (!experiment?.startedAt) return null;
   if (now.getTime() >= Date.parse(experiment.startedAt) + experiment.plannedDurationDays * DAY_MS) return null;
 
-  const id = nextCondition(experiment, experimentSessions(db, userId));
+  const id = nextCondition(experiment, experimentSessions(db, userId), now);
   const condition = experiment.conditions.find((c) => c.id === id)!;
   const how =
     typeof condition.parameters.timeOfDay === 'string'
@@ -69,4 +70,23 @@ export function activeAssignment(db: Database, userId: string, now: Date): Activ
     assignment: { experimentId: experiment.id, conditionId: condition.id, label: condition.label },
     rationale: `Experiment assignment: condition ${condition.id}, ${condition.label}. ${how}`,
   };
+}
+
+/**
+ * "Why this workout?" for an assigned workout: appends the assignment line and, when a
+ * time-of-day assignment conflicts with the profile's preferred time, replaces the
+ * preferred-time line with an explanation of which one applies. Assignment itself is
+ * never influenced by the preference (that would undo the A/B design).
+ */
+export function explainAssignment(rationale: readonly string[], assigned: ActiveAssignment, preferredTimes: readonly string[]): string[] {
+  const time = assigned.condition.parameters.timeOfDay;
+  const conflicts = typeof time === 'string' && preferredTimes.length > 0 && !preferredTimes.includes(time);
+  const lines = conflicts
+    ? rationale.map((line) =>
+        line.startsWith(PREFERRED_TIME_PREFIX)
+          ? `Your experiment assignment (${assigned.condition.label.split(' (')[0]}) takes priority over your preferred time (${preferredTimes.join(' or ')}) while the experiment runs.`
+          : line,
+      )
+    : [...rationale];
+  return [...lines, assigned.rationale];
 }

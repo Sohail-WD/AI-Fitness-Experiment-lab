@@ -7,7 +7,7 @@ import type { Database } from '../db/database.ts';
 import { AppError } from '../errors.ts';
 import { getProfile } from '../repositories/profileRepository.ts';
 import { getLatestWorkout, insertWorkout } from '../repositories/workoutRepository.ts';
-import { activeAssignment } from '../services/experimentSessions.ts';
+import { activeAssignment, explainAssignment } from '../services/experimentSessions.ts';
 import { requireVisitor } from '../visitors.ts';
 import { parseWith } from '../validation/parse.ts';
 
@@ -29,7 +29,7 @@ export function registerWorkoutRoutes(app: FastifyInstance, deps: { db: Database
     const requirements = personalize(effective, constraints, exerciseLibrary);
     try {
       const plan = generateWorkout(requirements, exerciseLibrary, seed);
-      if (assigned) plan.rationale.push(assigned.rationale);
+      if (assigned) plan.rationale = explainAssignment(plan.rationale, assigned, profile.schedule.preferredTimes);
       return insertWorkout(deps.db, profile.id, plan, assigned?.assignment ?? null);
     } catch (err) {
       if (err instanceof WorkoutGenerationError) throw new AppError(422, 'unprocessable', err.message);

@@ -174,6 +174,9 @@ export function generateWorkout(
   };
 }
 
+/** Start of the "Why this workout?" line about the profile's preferred time. */
+export const PREFERRED_TIME_PREFIX = 'Planned for your preferred time:';
+
 function buildRationale(
   req: WorkoutRequirements,
   library: readonly ExerciseDefinition[],
@@ -212,7 +215,7 @@ function buildRationale(
   );
 
   if (req.preferredTimes.length > 0) {
-    lines.push(`Planned for your preferred time: ${req.preferredTimes.join(' or ')}. The time is for planning only; it does not change which exercises are chosen.`);
+    lines.push(`${PREFERRED_TIME_PREFIX} ${req.preferredTimes.join(' or ')}. The time is for planning only; it does not change which exercises are chosen.`);
   }
 
   const spaceExcluded = req.exclusions.filter((x) => x.reason === 'space');
